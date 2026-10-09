@@ -10,8 +10,8 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 | Слой | Роль | Каталог |
 |------|------|---------|
-| Flutter UI | экраны, жесты, отображение | `lib/` |
-| Rust crate | ядро: парсинг, NLP, перевод, словарь, SQLite | `rust/` |
+| Flutter UI | экраны, жесты, отображение, **user persistence (Drift)** | `lib/` |
+| Rust crate | compute: парсинг, NLP, офлайн-перевод (без user SQLite) | `rust/` |
 | FRB glue | FFI/WASM-сборка (не бизнес-логика) | `rust_builder/` |
 
 Связка — **flutter_rust_bridge** (FRB) 2.13.0: API в Rust (`rust/src/api/`) → generated Dart (`lib/src/rust/`). На native — FFI, на Web — WASM (in-process). На текущем этапе внешние API-ключи не используются.
@@ -26,7 +26,9 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Current vs target
 
-В репозитории пока **scaffold-demo**: `lib/main.dart` вызывает `process_text` / `add_numbers` из Rust. Продуктовые сценарии ниже — целевой контракт; реализовывать по ним, не раздувая demo-логику на стороне Dart.
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`). Rust scaffold API (`process_text` / `add_numbers`) ещё в crate, но **не** home UI.
+
+**Ещё target (не в этом слое):** Reader / parse / lemma highlight / split / offline translate — следующие changes.
 
 ---
 
@@ -51,14 +53,14 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 - Выделение фразы → перевод фразы целиком
 - Split view: оригинал + перевод, sync scroll
 - Опциональный ИИ для перевода/объяснений
-- Локальное хранение (словарь, субтитры, настройки) — SQLite на устройстве
+- Локальное хранение (папки/документы библиотеки, словарь, настройки later) — **Drift** в Flutter (`lib/`)
 - Работа офлайн
 
-### Сейчас в коде (scaffold)
+### Сейчас в коде
 
-- Flutter UI: поле ввода + кнопка «Вызвать Rust» + результат
-- Rust: `process_text` → `to_uppercase`; `add_numbers`
-- Платформы scaffold: Android, iOS, Linux, macOS, Windows, Web
+- Flutter: shell **Library** (папки / import) + **Vocab** (CRUD); Drift schema + repositories
+- Rust: scaffold `process_text` / `add_numbers` / `init_app` (compute later)
+- Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold)
 
 ---
 
@@ -74,7 +76,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Продуктовые принципы
 
-- Вся тяжёлая логика — в **Rust**; Flutter только UI и оркестрация вызовов
+- Тяжёлый **compute** (parse / tokenize / lemmatize / offline translate) — в **Rust**; Flutter — UI, оркестрация FRB и **user persistence через Drift**
 - Офлайн по умолчанию; без обязательных внешних ключей на старте
 - Быстрая итерация UI через Flutter Hot Reload; ядро — нативная производительность Rust
 - Единая кодовая база для целевых платформ: **Android, iOS, Web (WASM)**
@@ -105,9 +107,11 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 |------|------------|
 | UI | Flutter / Dart (`sdk: ^3.13.4`), `lib/` |
 | Bridge | `flutter_rust_bridge` `2.13.0` (FFI native, WASM web) |
-| Ядро | Rust edition `2021`, crate `rust_lib_my_translator_app` (`cdylib` + `staticlib`) |
-| Хранение (target) | SQLite на устройстве через Rust (`diesel` / `rusqlite`) — ещё не подключено |
+| Ядро (compute) | Rust edition `2021`, crate `rust_lib_my_translator_app` (`cdylib` + `staticlib`) |
+| Хранение (user data) | **Drift** в Flutter `lib/` (folders / documents / dictionary; Android / iOS / Web) |
 | Линты Dart | `flutter_lints` + `analysis_options.yaml` |
+
+Rust **не** владеет пользовательским SQLite (`rusqlite` / `diesel` / `rust/src/db` для user data — не канон).
 
 Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`rust_builder`) → crate `rust/`.
 
@@ -135,7 +139,7 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 ## Data And Utilities
 
 - Опциональный ИИ — только позже и явно.
-- Все пользовательские данные — локально (target: SQLite из Rust).
+- Все пользовательские данные — локально через **Drift** в `lib/` (библиотека папок/документов, личный словарь; settings later). Source of truth — Drift, не Rust SQLite.
 - Конфиг FRB — `flutter_rust_bridge.yaml`:
 
   ```yaml
@@ -154,13 +158,14 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 |--------|-----|
 | Парсер SRT/VTT/ASS | Rust (`rust/src/…`), тонкий FFI в `api/` |
 | Токенизация / лемматизация / матч словоформ | Rust |
-| Словарь CRUD + контекст | Rust + SQLite |
+| Библиотека папок / документов (`library/folders`, `library/documents`) | Drift в `lib/` |
+| Словарь CRUD + контекст (`dictionary/entries`) | Drift в `lib/` (persist); NLP lemma keys — Rust when compute lands |
 | Офлайн-перевод слов/фраз | Rust |
 | Подсветка / разметка токенов для UI | Rust готовит данные; Flutter рисует |
-| Экраны reader / split / словарь / загрузка файла | `lib/` |
-| Смена FFI-контракта | `rust/src/api/` → codegen → Dart-вызовы |
+| Экраны library / vocab / reader / split | `lib/` |
+| Смена FFI-контракта (compute) | `rust/src/api/` → codegen → Dart-вызовы |
 
-Не дублировать парсинг/лемматизацию/правила словаря на Dart.
+Не дублировать парсинг/лемматизацию/offline translate на Dart. User persist — Drift, не FRB storage API.
 
 ---
 
@@ -175,6 +180,7 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 | Unit/widget tests | `flutter test` |
 | Integration tests | `flutter test integration_test` |
 | Запуск | `flutter run` / `flutter run -d chrome` |
+| Web (FRB WASM + Drift) | `flutter run -d chrome --web-header=Cross-Origin-Opener-Policy=same-origin --web-header=Cross-Origin-Embedder-Policy=require-corp` — без COOP/COEP `RustLib.init` падает (`SharedArrayBuffer` / `crossOriginIsolated`); Drift Web assets: `web/sqlite3.wasm`, `web/drift_worker.js` |
 | Сборка | `flutter build <platform>` (целевые: apk/ipa/web) |
 | Rust check/test | `cargo check` / `cargo test` в `rust/` |
 | FRB codegen | `flutter_rust_bridge_codegen generate` (CLI ≈ `2.13.0`) |
@@ -185,9 +191,9 @@ Package managers: pub (Dart), Cargo (`rust/`).
 
 ## How Boot / App Startup Is Organized
 
-1. `main()` → `await RustLib.init()` (`#[frb(init)] init_app` на Rust).
-2. `runApp(const MyApp())`.
-3. UI вызывает generated API (`processText` / `addNumbers` в scaffold).
+1. `main()` → `await RustLib.init()` (`#[frb(init)] init_app` на Rust); при failure — fatal UI, без shell.
+2. `runApp(TranslationReaderApp)` → открыть Drift DB (loading → OK / error+retry).
+3. Product shell: **Library** (default) + **Vocab**.
 
 Rust:
 
@@ -195,7 +201,7 @@ Rust:
 2. `rust/src/api/mod.rs` — модули API
 3. `rust/src/api/simple.rs` — текущий demo API
 
-По мере роста ядра ожидать модули вне `api/` (parse, lemma, dict, translate) и тонкий экспорт через `api/`.
+По мере роста ядра ожидать модули вне `api/` (parse, lemma, translate) и тонкий экспорт через `api/`. User DB — не в Rust.
 
 ---
 
@@ -216,13 +222,16 @@ my_translator_app/
 ├── flutter_rust_bridge.yaml
 ├── pubspec.yaml
 ├── lib/
-│   ├── main.dart             ← UI (сейчас scaffold)
+│   ├── main.dart             ← RustLib.init + runApp
+│   ├── app/                  ← MaterialApp, Library|Vocab shell
+│   ├── data/                 ← Drift DB, repositories (folders/docs/dict)
+│   ├── features/             ← upload (library), vocab, …
 │   └── src/rust/             ← GENERATED (не править)
 ├── rust/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
-│       ├── api/              ← публичный FFI API
+│       ├── api/              ← публичный FFI API (compute)
 │       └── frb_generated.rs  ← GENERATED
 ├── rust_builder/             ← glue / cargokit
 ├── integration_test/
@@ -237,14 +246,16 @@ my_translator_app/
 ## Layering / Dependency Direction
 
 ```
-lib/**  (Flutter UI)
-  → lib/src/rust/api/*  (generated)
+lib/**  (Flutter UI + Drift data layer)
+  → Drift DAOs / repositories   (folders, documents, dictionary_entries)
+  → lib/src/rust/api/*  (generated)   # compute only when needed
       → rust/src/api/*  (FFI surface)
-          → rust modules: parse / tokenize / lemmatize / dictionary / translate / db
+          → rust modules: parse / tokenize / lemmatize / translate
 ```
 
-- Flutter не хранит «истину» словаря и не парсит субтитры, если это уже в Rust.
-- SQLite и файлы субтитров — через Rust (target).
+- User data (library folders/documents, dictionary) — **Drift** source of truth в Flutter.
+- Parse / NLP / offline translate — Rust; не дублировать на Dart.
+- Не вводить `rusqlite` / `rust/src/db` для пользовательских данных.
 - `rust_builder/` не трогать без нужды сборки.
 
 ---
@@ -261,23 +272,26 @@ lib/**  (Flutter UI)
 
 - parse subtitles → структура строк/таймкодов
 - tokenize / lemmatize → токены + леммы для подсветки и тапа
-- dictionary add/list/remove + lookup by lemma
 - translate word/phrase (offline)
 - (позже) optional AI explain/translate
 
-Менять контракт только через Rust `api/` + codegen + обновление UI и тестов.
+Dictionary / library CRUD — **не** FRB storage API: persist через Drift в `lib/`. Lookup-by-lemma для highlight later может читать Drift на Flutter или передавать set лемм в Rust compute — отдельный change.
+
+Менять compute-контракт только через Rust `api/` + codegen + обновление UI и тестов.
 
 ---
 
 ## Business Entities And Areas (target)
 
-- **Subtitle document** — файл + распарсенные cues (текст, таймкоды)
-- **Token / Lemma** — единица тапа и ключ подсветки/словаря
-- **Dictionary entry** — лемма, перевод(ы), контекст (фраза/строка субтитров)
+- **Library folder** (`library/folders`) — дерево папок библиотеки (Drift)
+- **Library document** (`library/documents`) — subtitle-файл в папке (метаданные + bytes/path; Drift)
+- **Subtitle cues** — распарсенные строки/таймкоды (Rust parse, later)
+- **Token / Lemma** — единица тапа и ключ подсветки/словаря (Rust NLP)
+- **Dictionary entry** (`dictionary/entries`) — лемма, перевод(ы), контекст (Drift persist)
 - **Reader session** — открытый документ, позиция скролла, режим split
-- **Settings** — языки, (позже) ИИ-провайдер
+- **Settings** — языки, (позже) ИИ-провайдер (Drift later)
 
-Размещение: сущности и правила — Rust; виджеты и жесты — Flutter.
+Размещение: user persist — Drift / Flutter; compute (parse/NLP/translate) — Rust; виджеты и жесты — Flutter.
 
 ---
 
@@ -312,6 +326,6 @@ lib/**  (Flutter UI)
 
 ## Related Layers (in-repo)
 
-- **Flutter** (`lib/`) — UI Translation Reader
-- **Rust** (`rust/`) — авторитетное ядро (parse / NLP / dict / offline translate / SQLite)
-- Согласование контракта — только через FRB codegen, не ручным edit generated-файлов
+- **Flutter** (`lib/`) — UI Translation Reader + Drift user persistence
+- **Rust** (`rust/`) — compute-ядро (parse / NLP / offline translate); без user SQLite
+- Согласование compute-контракта — только через FRB codegen, не ручным edit generated-файлов

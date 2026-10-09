@@ -37,6 +37,13 @@ dependencies:
   rust_lib_my_translator_app:
     path: rust_builder
   flutter_rust_bridge: 2.13.0
+  drift: ^2.35.2
+  sqlite3: ^3.7.0
+  path: ^1.9.1
+  path_provider: ^2.1.6
+  file_picker: ^13.1.0
+  sqlite3_flutter_libs: ^0.6.0+eol
+  drift_flutter: ^0.3.1
 
 dev_dependencies:
   flutter_test:
@@ -50,6 +57,8 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   integration_test:
     sdk: flutter
+  drift_dev: ^2.35.1
+  build_runner: ^2.16.2
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

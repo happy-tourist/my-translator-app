@@ -1,0 +1,143 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:my_translator_app/data/library/document_content_store.dart';
+import 'package:my_translator_app/data/library/document_repository.dart';
+import 'package:my_translator_app/data/library/folder_repository.dart';
+import 'package:my_translator_app/data/library/library_exceptions.dart';
+
+import '../support/test_database.dart';
+
+Uint8List _srtBytes([String text = 'Hi']) =>
+    Uint8List.fromList(utf8.encode('1\n00:00:01,000 --> 00:00:02,000\n$text\n'));
+
+void main() {
+  late final db = createTestDatabase();
+  late MemoryDocumentContentStore store;
+  late FolderRepository folders;
+  late DocumentRepository documents;
+
+  setUp(() {
+    store = MemoryDocumentContentStore(storeAsContent: true);
+    folders = FolderRepository(db, contentStore: store);
+    documents = DocumentRepository(db, contentStore: store);
+  });
+
+  tearDownAll(() async {
+    await db.close();
+  });
+
+  tearDown(() async {
+    await db.delete(db.documents).go();
+    await db.delete(db.folders).go();
+  });
+
+  test('LD-01: Import valid subtitle file', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final doc = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'episode1.srt',
+      bytes: _srtBytes(),
+    );
+    expect(doc.title, 'episode1');
+    expect(doc.format, 'srt');
+    expect(doc.folderId, folder.id);
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.title), contains('episode1'));
+  });
+
+  test('LD-02: Reject import without folder', () async {
+    expect(
+      () => documents.importIntoFolder(
+        folderId: null,
+        fileName: 'episode1.srt',
+        bytes: _srtBytes(),
+      ),
+      throwsA(isA<LibraryValidationException>()),
+    );
+  });
+
+  test('LD-03: Reject unsupported file type', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    expect(
+      () => documents.importIntoFolder(
+        folderId: folder.id,
+        fileName: 'notes.txt',
+        bytes: Uint8List.fromList(utf8.encode('hello')),
+      ),
+      throwsA(
+        isA<LibraryValidationException>().having(
+          (e) => e.message,
+          'message',
+          contains('Unsupported'),
+        ),
+      ),
+    );
+    expect(await documents.listInFolder(folder.id), isEmpty);
+  });
+
+  test('LD-04: List documents after import', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'a.srt',
+      bytes: _srtBytes('a'),
+    );
+    await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'b.vtt',
+      bytes: Uint8List.fromList(utf8.encode('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nb\n')),
+    );
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.title).toList(), ['a', 'b']);
+  });
+
+  test('LD-05: Delete one document', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final keep = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'keep.srt',
+      bytes: _srtBytes('keep'),
+    );
+    final drop = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'episode1.srt',
+      bytes: _srtBytes('drop'),
+    );
+    await documents.deleteDocument(drop.id);
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.id), [keep.id]);
+    expect(await folders.getById(folder.id), isNotNull);
+  });
+
+  test('LD-07: Import ASS/SSA file as format ass', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final ssa = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'show.ssa',
+      bytes: Uint8List.fromList(utf8.encode('[Script Info]\n')),
+    );
+    final ass = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'show.ass',
+      bytes: Uint8List.fromList(utf8.encode('[Script Info]\n')),
+    );
+    expect(ssa.format, 'ass');
+    expect(ass.format, 'ass');
+  });
+
+  test('LD-09: Web import stores content (no filesystem path)', () async {
+    final webStore = MemoryDocumentContentStore(storeAsContent: true);
+    final webDocs = DocumentRepository(db, contentStore: webStore);
+    final folder = await folders.createFolder(name: 'S01');
+    final doc = await webDocs.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'web.srt',
+      bytes: _srtBytes('web'),
+    );
+    expect(doc.content, isNotNull);
+    expect(doc.content, contains('web'));
+    expect(doc.storageKey, isNull);
+  });
+}
