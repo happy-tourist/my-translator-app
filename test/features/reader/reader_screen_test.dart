@@ -432,12 +432,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Tr 0'), findsOneWidget);
 
+    // Delete is in bottom-pane top chrome, not AppBar (RS-07 / D8).
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byKey(const Key('readerTranslationDelete')),
+      ),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('readerTranslationDelete')), findsOneWidget);
+
     await tester.tap(find.byKey(const Key('readerTranslationDelete')));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('readerTranslationEmpty')), findsOneWidget);
     expect(find.byKey(const Key('readerTranslationLoad')), findsOneWidget);
     expect(find.byKey(const Key('readerTranslationCueList')), findsNothing);
+    expect(find.byKey(const Key('readerTranslationDelete')), findsNothing);
     expect(find.text('Tr 0'), findsNothing);
 
     final reloaded = await documents.getById(original.id);
@@ -491,6 +502,54 @@ void main() {
     expect(find.byKey(const Key('readerTranslationEmpty')), findsNothing);
   });
 
+  testWidgets('RS-10: Toggle split preserves original scroll', (tester) async {
+    pumpCues = _sampleCues(count: 40);
+    await pumpReader(tester);
+
+    await tester.drag(
+      find.byKey(const Key('readerCueList')),
+      const Offset(0, -2500),
+    );
+    await tester.pumpAndSettle();
+
+    final beforeVisible = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Cue line '))
+        .toList();
+    expect(beforeVisible, isNotEmpty);
+    final anchorLine = beforeVisible.first;
+    final anchorIndex = int.parse(anchorLine.replaceFirst('Cue line ', ''));
+    expect(anchorIndex, greaterThan(0));
+
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerOriginalCueList')), findsOneWidget);
+    expect(find.byKey(Key('readerCue_$anchorIndex')), findsOneWidget);
+    expect(find.text(anchorLine), findsOneWidget);
+
+    final afterVisible = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerOriginalCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Cue line '))
+        .toList();
+    expect(afterVisible, isNotEmpty);
+    // Top-visible cue stays at the same (or nearby) index — not reset to 0.
+    final afterIndex =
+        int.parse(afterVisible.first.replaceFirst('Cue line ', ''));
+    expect(afterIndex, greaterThan(0));
+    expect((afterIndex - anchorIndex).abs(), lessThanOrEqualTo(2));
+  });
+
   testWidgets(
     'Failed restore: stuck link shows delete, then load works',
     (tester) async {
@@ -520,6 +579,13 @@ void main() {
       expect(find.text('Saved translation could not be shown'), findsOneWidget);
       expect(find.byKey(const Key('readerTranslationLoad')), findsNothing);
       expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byKey(const Key('readerTranslationDeleteEmpty')),
+        ),
+        findsNothing,
+      );
+      expect(
         find.byKey(const Key('readerTranslationDeleteEmpty')),
         findsOneWidget,
       );
@@ -528,6 +594,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('readerTranslationLoad')), findsOneWidget);
+      expect(
+        find.byKey(const Key('readerTranslationDeleteEmpty')),
+        findsNothing,
+      );
       expect(await documents.getById(translation.id), isNull);
       expect(
         (await documents.getById(original.id))!.translationDocumentId,

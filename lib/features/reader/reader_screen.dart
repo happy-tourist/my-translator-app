@@ -25,7 +25,7 @@ class PickedTranslationFile {
 
 typedef ReaderTranslationPicker = Future<PickedTranslationFile?> Function();
 
-/// Cues-first Reader with optional split mode (RS-01…RS-09).
+/// Cues-first Reader with optional split mode (RS-01…RS-10).
 class ReaderScreen extends StatefulWidget {
   const ReaderScreen({
     super.key,
@@ -102,12 +102,39 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _toggleSplit() {
-    setState(() => _splitEnabled = !_splitEnabled);
-    if (_splitEnabled && _hasTranslationCues) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _syncPanes(fromOriginal: true);
-      });
+    if (_splitEnabled) {
+      setState(() => _splitEnabled = false);
+      return;
     }
+
+    // RS-10 / D7: remounting the original list would reset scroll — capture
+    // top-visible anchor before enabling split, restore after layout.
+    final anchor = _topVisible(_originalPositions);
+    final restoreIndex = (anchor?.index ?? 0).clamp(
+      0,
+      widget.originalCues.isEmpty ? 0 : widget.originalCues.length - 1,
+    );
+    final restoreAlignment =
+        (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
+
+    setState(() => _splitEnabled = true);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.originalCues.isNotEmpty &&
+          _originalScrollController.isAttached) {
+        _originalScrollController.jumpTo(
+          index: restoreIndex,
+          alignment: restoreAlignment,
+        );
+      }
+      if (_hasTranslationCues) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _syncPanes(fromOriginal: true);
+        });
+      }
+    });
   }
 
   Future<PickedTranslationFile?> _defaultPick() async {
@@ -155,6 +182,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _translationDocumentId = attached.id;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
         _syncPanes(fromOriginal: true);
       });
     } on rust_parse.ParseErrorKind catch (kind) {
@@ -279,6 +307,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (_translationCues == null || _translationCues!.isEmpty) return false;
     _userInitiatedScroll = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       _syncPanes(fromOriginal: fromOriginal);
     });
     return false;
@@ -296,14 +325,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
-          if (_splitEnabled &&
-              (_hasTranslationCues || _hasLinkedTranslation))
-            IconButton(
-              key: const Key('readerTranslationDelete'),
-              tooltip: 'Delete translation',
-              icon: const Icon(Icons.delete_outline),
-              onPressed: _deleteTranslation,
-            ),
           IconButton(
             key: const Key('readerSplitToggle'),
             tooltip: _splitEnabled ? 'Hide split' : 'Show split',
@@ -333,7 +354,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final usable = constraints.maxHeight - _dividerHandleHeight;
-        final topH = (usable * _dividerRatio).clamp(0.0, usable);
+        // Delete chrome (D8) needs ≥48dp; keep bottom pane tall enough when shown.
+        final needsDeleteChrome =
+            _hasTranslationCues || _hasLinkedTranslation;
+        final ratioMin = usable * _minRatio;
+        final chromeFloor = usable < kMinInteractiveDimension
+            ? usable
+            : kMinInteractiveDimension.toDouble();
+        final minBottom = needsDeleteChrome && chromeFloor > ratioMin
+            ? chromeFloor
+            : ratioMin;
+        final maxTop = (usable - minBottom).clamp(0.0, usable);
+        final minTop = ratioMin > maxTop ? maxTop : ratioMin;
+        final rawTop = usable * _dividerRatio;
+        final topH = rawTop < minTop
+            ? minTop
+            : (rawTop > maxTop ? maxTop : rawTop);
         final bottomH = usable - topH;
 
         return Column(
@@ -390,10 +426,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Widget _buildBottomPane() {
     final cues = _translationCues;
+    final showDeleteChrome =
+        _hasTranslationCues || _hasLinkedTranslation;
+    final stuckLink = !_hasTranslationCues && _hasLinkedTranslation;
+
+    final Widget content;
     if (cues == null || cues.isEmpty) {
-      // Stuck link without cues (failed restore): delete first, then load.
-      final stuckLink = _hasLinkedTranslation;
-      return Center(
+      content = Center(
         key: const Key('readerTranslationEmpty'),
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -405,14 +444,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ? 'Saved translation could not be shown'
                     : 'No translation loaded',
               ),
-              const SizedBox(height: 12),
-              if (stuckLink)
-                ElevatedButton(
-                  key: const Key('readerTranslationDeleteEmpty'),
-                  onPressed: _deleteTranslation,
-                  child: const Text('Delete translation'),
-                )
-              else
+              if (!stuckLink) ...[
+                const SizedBox(height: 12),
                 ElevatedButton(
                   key: const Key('readerTranslationLoad'),
                   onPressed: _loadingTranslation ? null : _loadTranslation,
@@ -424,19 +457,54 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         )
                       : const Text('Load translation'),
                 ),
+              ],
             ],
           ),
         ),
       );
+    } else {
+      content = _buildCueList(
+        listKey: const Key('readerTranslationCueList'),
+        cues: cues,
+        keyPrefix: 'readerTranslationCue',
+        itemScrollController: _translationScrollController,
+        itemPositionsListener: _translationPositions,
+        fromOriginal: false,
+      );
     }
 
-    return _buildCueList(
-      listKey: const Key('readerTranslationCueList'),
-      cues: cues,
-      keyPrefix: 'readerTranslationCue',
-      itemScrollController: _translationScrollController,
-      itemPositionsListener: _translationPositions,
-      fromOriginal: false,
+    if (!showDeleteChrome) return content;
+
+    // RS-07 / D8: Delete lives in bottom-pane top chrome, not AppBar.
+    return Column(
+      children: [
+        _buildBottomDeleteChrome(emptyVariant: stuckLink),
+        Expanded(child: content),
+      ],
+    );
+  }
+
+  Widget _buildBottomDeleteChrome({required bool emptyVariant}) {
+    // Match Material min tap target (48) so IconButton does not overflow.
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: SizedBox(
+        height: kMinInteractiveDimension,
+        width: double.infinity,
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: IconButton(
+            key: Key(
+              emptyVariant
+                  ? 'readerTranslationDeleteEmpty'
+                  : 'readerTranslationDelete',
+            ),
+            tooltip: 'Delete translation',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _deleteTranslation,
+          ),
+        ),
+      ),
     );
   }
 
