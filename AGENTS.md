@@ -98,6 +98,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 - `rust_builder/` — только glue/cargokit; бизнес-логику туда не класть
 - `main()`: `await RustLib.init()` до `runApp`
 - `integration_test/simple_test.dart` сейчас **рассинхронизирован** с UI в `main.dart` (ждёт старый `Result: Hello, Tom!`)
+- **Web local run:** всегда `flutter run -d chrome --web-port=5555` + COOP/COEP headers (`http://localhost:5555`). Порт входит в browser origin — без фиксированного порта Drift OPFS выглядит «пустым» после рестарта. Канон команды: meta skill `work-with-env-deploy`.
 
 ---
 
