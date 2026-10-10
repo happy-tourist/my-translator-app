@@ -15,7 +15,7 @@ mod error;
 mod srt;
 mod vtt;
 
-pub use cue::{Cue, ParsedSubtitles};
+pub use cue::{Cue, ParsedDocument};
 pub use error::ParseError;
 
 /// Detected / requested subtitle format.
@@ -40,13 +40,13 @@ impl Format {
 pub fn parse_subtitles(
     bytes: &[u8],
     format_hint: Option<&str>,
-) -> Result<ParsedSubtitles, ParseError> {
+) -> Result<ParsedDocument, ParseError> {
     let text = decode_utf8(bytes)?;
     parse_text(&text, format_hint)
 }
 
 /// Parse already-decoded subtitle text (BOM already stripped by caller or here).
-pub fn parse_text(text: &str, format_hint: Option<&str>) -> Result<ParsedSubtitles, ParseError> {
+pub fn parse_text(text: &str, format_hint: Option<&str>) -> Result<ParsedDocument, ParseError> {
     let text = strip_bom(text);
     let format = detect::detect_format(text, format_hint)?;
     let cues = match format {
@@ -54,7 +54,7 @@ pub fn parse_text(text: &str, format_hint: Option<&str>) -> Result<ParsedSubtitl
         Format::Vtt => vtt::parse_vtt(text)?,
         Format::Ass => ass::parse_ass(text)?,
     };
-    Ok(ParsedSubtitles { format, cues })
+    Ok(ParsedDocument { format, cues })
 }
 
 fn decode_utf8(bytes: &[u8]) -> Result<String, ParseError> {

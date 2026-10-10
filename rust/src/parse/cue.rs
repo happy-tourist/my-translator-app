@@ -16,8 +16,10 @@ pub struct Cue {
 }
 
 /// Successful parse result: detected format plus ordered cues.
+/// Named differently from FRB DTO [`crate::api::parse::ParsedSubtitles`] to avoid
+/// codegen merge ambiguity on the same type name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedSubtitles {
+pub struct ParsedDocument {
     pub format: Format,
     pub cues: Vec<Cue>,
 }
