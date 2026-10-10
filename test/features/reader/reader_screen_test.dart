@@ -553,6 +553,71 @@ void main() {
     expect((afterIndex - anchorIndex).abs(), lessThanOrEqualTo(2));
   });
 
+  testWidgets(
+    'Show split syncs translation pane to original anchor',
+    (tester) async {
+      final originalCues = _sampleCues(count: 40, prefix: 'Orig');
+      final translationCues = _sampleCues(
+        count: 40,
+        prefix: 'Tr',
+        startStepMs: 1500,
+      );
+      pumpCues = originalCues;
+      pumpTranslationCues = translationCues;
+
+      await pumpReader(tester);
+
+      await tester.drag(
+        find.byKey(const Key('readerCueList')),
+        const Offset(0, -2500),
+      );
+      await tester.pumpAndSettle();
+
+      final beforeVisible = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Orig '))
+          .toList();
+      expect(beforeVisible, isNotEmpty);
+      final anchorIndex =
+          int.parse(beforeVisible.first.replaceFirst('Orig ', ''));
+      expect(anchorIndex, greaterThan(0));
+      final expected = nearestCueIndex(
+        translationCues,
+        originalCues[anchorIndex].startMs,
+      );
+      expect(expected, greaterThan(0));
+
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('readerTranslationCueList')), findsOneWidget);
+      expect(
+        find.byKey(Key('readerTranslationCue_$expected')),
+        findsOneWidget,
+      );
+
+      final trVisible = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerTranslationCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Tr '))
+          .toList();
+      expect(trVisible, isNotEmpty);
+      final trIndex = int.parse(trVisible.first.replaceFirst('Tr ', ''));
+      // Must not stay at cue 0 when original was scrolled far.
+      expect(trIndex, greaterThan(0));
+      expect((trIndex - expected).abs(), lessThanOrEqualTo(2));
+    },
+  );
+
   testWidgets('RS-11: Hide split preserves original scroll', (tester) async {
     pumpCues = _sampleCues(count: 40);
     await pumpReader(tester);

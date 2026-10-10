@@ -141,11 +141,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
           alignment: restoreAlignment,
         );
       }
+      // Show + translation: sync from *captured* original anchor. Re-reading
+      // ItemPositionsListener right after remount often still reports cue 0;
+      // the translation ItemScrollController may also not be attached yet.
       if (enabling && _hasTranslationCues) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          _syncPanes(fromOriginal: true);
-        });
+        unawaited(
+          _syncPanes(
+            fromOriginal: true,
+            sourceIndex: restoreIndex,
+            sourceAlignment: restoreAlignment,
+          ),
+        );
       }
     });
   }
@@ -326,7 +332,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return best;
   }
 
-  Future<void> _syncPanes({required bool fromOriginal}) async {
+  Future<void> _syncPanes({
+    required bool fromOriginal,
+    int? sourceIndex,
+    double? sourceAlignment,
+    int attempt = 0,
+  }) async {
     if (_syncing || !_splitEnabled) return;
     final translation = _translationCues;
     if (translation == null || translation.isEmpty) return;
@@ -339,8 +350,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final targetController =
         fromOriginal ? _translationScrollController : _originalScrollController;
 
-    final anchor = _topVisible(sourceListener);
-    final anchorIndex = anchor?.index ?? 0;
+    // Bottom (or remounted) list may not have attached the scroll controller
+    // on the first post-frame after Show/load — retry instead of no-op @ 0.
+    if (!targetController.isAttached) {
+      if (attempt >= 8) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(
+          _syncPanes(
+            fromOriginal: fromOriginal,
+            sourceIndex: sourceIndex,
+            sourceAlignment: sourceAlignment,
+            attempt: attempt + 1,
+          ),
+        );
+      });
+      return;
+    }
+
+    final anchor =
+        sourceIndex == null ? _topVisible(sourceListener) : null;
+    final anchorIndex = sourceIndex ?? anchor?.index ?? 0;
     if (anchorIndex < 0 || anchorIndex >= sourceCues.length) return;
 
     final nearest =
@@ -348,7 +378,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (nearest < 0) return;
 
     // Pixel settle: match source anchor leading-edge within the viewport.
-    final sourceAlignment = (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
+    final alignment = (sourceAlignment ?? anchor?.itemLeadingEdge ?? 0.0)
+        .clamp(0.0, 1.0);
 
     _syncing = true;
     try {
@@ -362,7 +393,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       );
       if (!mounted || !targetController.isAttached) return;
       // (2) Pixel settle after time jump (alignment mirror, not continuous offset).
-      targetController.jumpTo(index: nearest, alignment: sourceAlignment);
+      targetController.jumpTo(index: nearest, alignment: alignment);
     } finally {
       _syncing = false;
     }
