@@ -2,11 +2,15 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show PanicException;
 
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
+import 'package:my_translator_app/features/reader/reader_screen.dart';
+import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
 
 /// Picked file payload for injectable import (tests / file_picker).
 class PickedLibraryFile {
@@ -18,6 +22,13 @@ class PickedLibraryFile {
 
 typedef LibraryFilePicker = Future<PickedLibraryFile?> Function();
 
+/// Injectable FRB parse seam for widget tests (frb-boundary).
+typedef ParseSubtitlesFn =
+    Future<rust_parse.ParsedSubtitles> Function({
+      required List<int> bytes,
+      String? formatHint,
+    });
+
 /// Minimal library UI: folder nav, create, import, cascade delete confirm (D8).
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({
@@ -25,11 +36,15 @@ class LibraryScreen extends StatefulWidget {
     required this.folderRepository,
     required this.documentRepository,
     this.filePicker,
+    this.parseSubtitles,
   });
 
   final FolderRepository folderRepository;
   final DocumentRepository documentRepository;
   final LibraryFilePicker? filePicker;
+
+  /// Defaults to generated FRB [rust_parse.parseSubtitles].
+  final ParseSubtitlesFn? parseSubtitles;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -40,9 +55,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<Folder> _folders = const [];
   List<Document> _documents = const [];
   var _loading = true;
+  var _opening = false;
   String? _listError;
 
   int? get _currentFolderId => _path.isEmpty ? null : _path.last.id;
+
+  ParseSubtitlesFn get _parse =>
+      widget.parseSubtitles ?? rust_parse.parseSubtitles;
 
   @override
   void initState() {
@@ -81,6 +100,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(key: const Key('libraryErrorSnack'), content: Text(message)),
     );
+  }
+
+  String _messageForParseError(rust_parse.ParseErrorKind kind) {
+    switch (kind) {
+      case rust_parse.ParseErrorKind.unsupportedFormat:
+        return 'Unsupported or unrecognized subtitle format';
+      case rust_parse.ParseErrorKind.encoding:
+        return 'File encoding is not valid UTF-8';
+      case rust_parse.ParseErrorKind.empty:
+        return 'No subtitle cues found in this file';
+      case rust_parse.ParseErrorKind.malformed:
+        return 'Could not parse this subtitle file';
+    }
   }
 
   Future<void> _createFolder() async {
@@ -213,8 +245,47 @@ class _LibraryScreenState extends State<LibraryScreen> {
     _reload();
   }
 
-  void _onDocumentTap(Document doc) {
-    _showError('Reader later');
+  Future<void> _onDocumentTap(Document doc) async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      final bytes = await widget.documentRepository.loadBytes(doc);
+      if (!mounted) return;
+      final parsed = await _parse(bytes: bytes, formatHint: doc.format);
+      if (!mounted) return;
+      // RC-05 / D4: never push Reader with zero cues (Rust should Err Empty).
+      if (parsed.cues.isEmpty) {
+        _showError(_messageForParseError(rust_parse.ParseErrorKind.empty));
+        return;
+      }
+      setState(() => _opening = false);
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ReaderScreen(title: doc.title, cues: parsed.cues),
+        ),
+      );
+    } on rust_parse.ParseErrorKind catch (kind) {
+      if (!mounted) return;
+      _showError(_messageForParseError(kind));
+    } on PanicException catch (e) {
+      assert(() {
+        debugPrint('Rust panic opening document: ${e.message}');
+        return true;
+      }());
+      if (!mounted) return;
+      _showError('Could not load document');
+    } catch (e, st) {
+      assert(() {
+        debugPrint('Open document failed: $e\n$st');
+        return true;
+      }());
+      if (!mounted) return;
+      _showError('Could not load document');
+    } finally {
+      if (mounted && _opening) {
+        setState(() => _opening = false);
+      }
+    }
   }
 
   @override
@@ -297,36 +368,51 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ),
       );
     }
-    return ListView(
-      key: const Key('libraryList'),
+    // Non-wiping open overlay (design D5): keep list visible under progress.
+    return Stack(
       children: [
-        ..._folders.map(
-          (folder) => ListTile(
-            key: Key('libraryFolder_${folder.id}'),
-            leading: const Icon(Icons.folder),
-            title: Text(folder.name),
-            onTap: () => _openFolder(folder),
-            trailing: IconButton(
-              key: Key('libraryDeleteFolder_${folder.id}'),
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () => _confirmDeleteFolder(folder),
+        ListView(
+          key: const Key('libraryList'),
+          children: [
+            ..._folders.map(
+              (folder) => ListTile(
+                key: Key('libraryFolder_${folder.id}'),
+                leading: const Icon(Icons.folder),
+                title: Text(folder.name),
+                onTap: () => _openFolder(folder),
+                trailing: IconButton(
+                  key: Key('libraryDeleteFolder_${folder.id}'),
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => _confirmDeleteFolder(folder),
+                ),
+              ),
             ),
-          ),
-        ),
-        ..._documents.map(
-          (doc) => ListTile(
-            key: Key('libraryDocument_${doc.id}'),
-            leading: const Icon(Icons.description_outlined),
-            title: Text(doc.title),
-            subtitle: Text(doc.format),
-            onTap: () => _onDocumentTap(doc),
-            trailing: IconButton(
-              key: Key('libraryDeleteDocument_${doc.id}'),
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () => _confirmDeleteDocument(doc),
+            ..._documents.map(
+              (doc) => ListTile(
+                key: Key('libraryDocument_${doc.id}'),
+                leading: const Icon(Icons.description_outlined),
+                title: Text(doc.title),
+                subtitle: Text(doc.format),
+                onTap: () => _onDocumentTap(doc),
+                trailing: IconButton(
+                  key: Key('libraryDeleteDocument_${doc.id}'),
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => _confirmDeleteDocument(doc),
+                ),
+              ),
             ),
-          ),
+          ],
         ),
+        if (_opening) ...[
+          ModalBarrier(
+            dismissible: false,
+            color: Theme.of(context).colorScheme.scrim.withValues(alpha: 0.2),
+          ),
+          const Center(
+            key: Key('libraryOpening'),
+            child: CircularProgressIndicator(),
+          ),
+        ],
       ],
     );
   }

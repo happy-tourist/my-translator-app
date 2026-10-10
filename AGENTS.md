@@ -26,9 +26,9 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Current vs target
 
-**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`). Rust scaffold API (`process_text` / `add_numbers`) ещё в crate, но **не** home UI.
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`). Rust: `rust/src/parse/` + `api/parse.rs` (плюс scaffold `process_text` / `add_numbers`, не home UI).
 
-**Ещё target (не в этом слое):** Reader / parse / lemma highlight / split / offline translate — следующие changes.
+**Ещё target:** tokenize / lemma highlight / word card / split / offline translate — следующие changes.
 
 ---
 
@@ -58,8 +58,8 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import) + **Vocab** (CRUD); Drift schema + repositories
-- Rust: scaffold `process_text` / `add_numbers` / `init_app` (compute later)
+- Flutter: shell **Library** (папки / import / open→Reader) + **Vocab** (CRUD); cues-first Reader; Drift schema + repositories (`loadBytes` / content store `load`)
+- Rust: `parse/` + FRB `parse_subtitles`; scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold)
 
 ---
@@ -119,20 +119,13 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 
 ## UI And Components
 
-### Target UX areas
+### UX areas
 
-- Загрузка / список субтитров
-- Reader: построчный оригинал, тап/выделение, подсветка по лемме
-- Карточка слова/фразы (перевод, лемма, «в словарь»)
-- Split view: оригинал ↔ перевод, sync scroll
-- Экран личного словаря
-- Настройки (языки, опциональный ИИ — позже)
+**Сейчас:** Library (папки / import / open), cues-first Reader (таймкоды + текст), Vocab CRUD.
 
-### Current scaffold
+**Target (later):** тап/выделение + подсветка по лемме, карточка слова/фразы, split view, настройки (языки, опциональный ИИ).
 
-- `lib/main.dart` — `MyApp` → `MyHomePage` (demo TextField / кнопка / результат)
-- Импорт API: `package:my_translator_app/src/rust/api/simple.dart`
-- Роутера и state-management (Provider/Riverpod/Bloc) пока нет
+Роутера и state-management пакетов (Provider/Riverpod/Bloc) пока нет — `Navigator` + screen state.
 
 ---
 
@@ -197,11 +190,12 @@ Package managers: pub (Dart), Cargo (`rust/`).
 
 Rust:
 
-1. `rust/src/lib.rs` — `api` + `frb_generated`
-2. `rust/src/api/mod.rs` — модули API
-3. `rust/src/api/simple.rs` — текущий demo API
+1. `rust/src/lib.rs` — `mod parse` + `api` + `frb_generated`
+2. `rust/src/api/mod.rs` — `simple`, `parse`, …
+3. `rust/src/parse/` — subtitle parse core; `api/parse.rs` — тонкий FRB
+4. `rust/src/api/simple.rs` — scaffold demo (не product home)
 
-По мере роста ядра ожидать модули вне `api/` (parse, lemma, translate) и тонкий экспорт через `api/`. User DB — не в Rust.
+Дальше: lemma / translate вне `api/` + тонкий экспорт. User DB — не в Rust.
 
 ---
 
@@ -225,12 +219,13 @@ my_translator_app/
 │   ├── main.dart             ← RustLib.init + runApp
 │   ├── app/                  ← MaterialApp, Library|Vocab shell
 │   ├── data/                 ← Drift DB, repositories (folders/docs/dict)
-│   ├── features/             ← upload (library), vocab, …
+│   ├── features/             ← upload (library), reader, vocab, …
 │   └── src/rust/             ← GENERATED (не править)
 ├── rust/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
+│       ├── parse/            ← subtitle parse core
 │       ├── api/              ← публичный FFI API (compute)
 │       └── frb_generated.rs  ← GENERATED
 ├── rust_builder/             ← glue / cargokit
@@ -260,17 +255,17 @@ lib/**  (Flutter UI + Drift data layer)
 
 ---
 
-## Flutter ↔ Rust Contract (current scaffold)
+## Flutter ↔ Rust Contract
 
 | Dart (generated) | Rust | Сейчас |
 |------------------|------|--------|
-| `processText(input:)` | `process_text` | `to_uppercase` |
-| `addNumbers(a:, b:)` | `add_numbers` | `a + b` |
+| `parseSubtitles(bytes:, formatHint:)` | `api::parse::parse_subtitles` | SRT/VTT/ASS → cues + `ParseErrorKind` |
+| `processText(input:)` | `process_text` | scaffold demo `to_uppercase` |
+| `addNumbers(a:, b:)` | `add_numbers` | scaffold demo `a + b` |
 | `RustLib.init()` | `init_app` | `setup_default_user_utils()` |
 
 ### Ожидаемые области API (target, ещё нет)
 
-- parse subtitles → структура строк/таймкодов
 - tokenize / lemmatize → токены + леммы для подсветки и тапа
 - translate word/phrase (offline)
 - (позже) optional AI explain/translate
@@ -285,7 +280,7 @@ Dictionary / library CRUD — **не** FRB storage API: persist через Drift
 
 - **Library folder** (`library/folders`) — дерево папок библиотеки (Drift)
 - **Library document** (`library/documents`) — subtitle-файл в папке (метаданные + bytes/path; Drift)
-- **Subtitle cues** — распарсенные строки/таймкоды (Rust parse, later)
+- **Subtitle cues** — распарсенные строки/таймкоды (Rust `parse/` → FRB; Reader отображает)
 - **Token / Lemma** — единица тапа и ключ подсветки/словаря (Rust NLP)
 - **Dictionary entry** (`dictionary/entries`) — лемма, перевод(ы), контекст (Drift persist)
 - **Reader session** — открытый документ, позиция скролла, режим split

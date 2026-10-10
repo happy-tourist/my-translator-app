@@ -17,5 +17,11 @@ class _WebDocumentContentStore implements DocumentContentStore {
   }
 
   @override
+  Future<Uint8List> load(String storageKey) async {
+    // Web persists inline Drift [content]; repository encodes that instead.
+    throw StateError('Web document store has no sandbox file for: $storageKey');
+  }
+
+  @override
   Future<void> delete(String? storageKey) async {}
 }

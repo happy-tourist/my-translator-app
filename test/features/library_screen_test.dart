@@ -7,11 +7,24 @@ import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/features/upload/library_screen.dart';
+import 'package:my_translator_app/src/rust/api/parse.dart';
 
 import '../support/test_database.dart';
 
 Uint8List _srtBytes([String text = 'Hi']) =>
     Uint8List.fromList(utf8.encode('1\n00:00:01,000 --> 00:00:02,000\n$text\n'));
+
+ParsedSubtitles _okParsed([String text = 'Hi']) => ParsedSubtitles(
+  format: 'srt',
+  cues: [
+    CueDto(
+      index: 0,
+      startMs: BigInt.from(1000),
+      endMs: BigInt.from(2000),
+      textLines: [text],
+    ),
+  ],
+);
 
 void main() {
   late final db = createTestDatabase();
@@ -37,6 +50,7 @@ void main() {
   Future<void> pumpLibrary(
     WidgetTester tester, {
     LibraryFilePicker? filePicker,
+    ParseSubtitlesFn? parseSubtitles,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -44,6 +58,7 @@ void main() {
           folderRepository: folders,
           documentRepository: documents,
           filePicker: filePicker,
+          parseSubtitles: parseSubtitles,
         ),
       ),
     );
@@ -151,20 +166,57 @@ void main() {
     expect(find.text('b'), findsOneWidget);
   });
 
-  testWidgets('LD-08: Tap document does not open Reader', (tester) async {
+  testWidgets('LD-10: Open document opens Reader after successful parse', (
+    tester,
+  ) async {
     final folder = await folders.createFolder(name: 'S01');
     final doc = await documents.importIntoFolder(
       folderId: folder.id,
       fileName: 'ep.srt',
-      bytes: _srtBytes(),
+      bytes: _srtBytes('Hello cue'),
     );
-    await pumpLibrary(tester);
+    await pumpLibrary(
+      tester,
+      parseSubtitles: ({required bytes, formatHint}) async =>
+          _okParsed('Hello cue'),
+    );
     await tester.tap(find.byKey(Key('libraryFolder_${folder.id}')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('libraryDocument_${doc.id}')));
     await tester.pumpAndSettle();
-    expect(find.text('Reader later'), findsOneWidget);
-    expect(find.textContaining('processText'), findsNothing);
-    expect(find.textContaining('Вызвать Rust'), findsNothing);
+
+    expect(find.byKey(const Key('readerScreen')), findsOneWidget);
+    expect(find.text('Hello cue'), findsOneWidget);
+    expect(find.text('00:00:01,000 → 00:00:02,000'), findsOneWidget);
+    expect(find.text('Reader later'), findsNothing);
+  });
+
+  testWidgets('LD-11 / RC-05: Failed open stays in Library with error', (
+    tester,
+  ) async {
+    final folder = await folders.createFolder(name: 'S01');
+    final doc = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'bad.srt',
+      bytes: _srtBytes(),
+    );
+    await pumpLibrary(
+      tester,
+      parseSubtitles: ({required bytes, formatHint}) async {
+        throw ParseErrorKind.empty;
+      },
+    );
+    await tester.tap(find.byKey(Key('libraryFolder_${folder.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('libraryDocument_${doc.id}')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerScreen')), findsNothing);
+    expect(find.byKey(const Key('libraryList')), findsOneWidget);
+    expect(find.byKey(const Key('libraryErrorSnack')), findsOneWidget);
+    expect(
+      find.text('No subtitle cues found in this file'),
+      findsOneWidget,
+    );
   });
 }

@@ -19,6 +19,9 @@ abstract class DocumentContentStore {
     required Uint8List bytes,
   });
 
+  /// Reads sandbox bytes by [storageKey] (native / memory-key mode).
+  Future<Uint8List> load(String storageKey);
+
   Future<void> delete(String? storageKey);
 }
 
@@ -45,6 +48,15 @@ class MemoryDocumentContentStore implements DocumentContentStore {
     final key = 'library_docs/${++_seq}_$fileName';
     files[key] = bytes;
     return StoredDocumentBytes(storageKey: key);
+  }
+
+  @override
+  Future<Uint8List> load(String storageKey) async {
+    final bytes = files[storageKey];
+    if (bytes == null) {
+      throw StateError('Document content not found for key: $storageKey');
+    }
+    return bytes;
   }
 
   @override

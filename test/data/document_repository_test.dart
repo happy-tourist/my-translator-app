@@ -140,4 +140,31 @@ void main() {
     expect(doc.content, contains('web'));
     expect(doc.storageKey, isNull);
   });
+
+  test('loadBytes: Web content path encodes UTF-8', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final doc = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'web.srt',
+      bytes: _srtBytes('web'),
+    );
+    final loaded = await documents.loadBytes(doc);
+    expect(utf8.decode(loaded), contains('web'));
+  });
+
+  test('loadBytes: native storageKey path reads store', () async {
+    final keyStore = MemoryDocumentContentStore(storeAsContent: false);
+    final keyDocs = DocumentRepository(db, contentStore: keyStore);
+    final folder = await folders.createFolder(name: 'S01');
+    final bytes = _srtBytes('native');
+    final doc = await keyDocs.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'native.srt',
+      bytes: bytes,
+    );
+    expect(doc.storageKey, isNotNull);
+    expect(doc.content, isNull);
+    final loaded = await keyDocs.loadBytes(doc);
+    expect(loaded, bytes);
+  });
 }

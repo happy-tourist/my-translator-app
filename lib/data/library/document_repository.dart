@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import 'package:my_translator_app/data/database/app_database.dart';
@@ -72,6 +74,22 @@ class DocumentRepository {
     return (_db.select(
       _db.documents,
     )..where((d) => d.id.equals(id))).getSingleOrNull();
+  }
+
+  /// Loads raw subtitle bytes for Reader open (design D5).
+  ///
+  /// Web / content mode: `utf8.encode(doc.content!)`.
+  /// Native: sandbox file via [DocumentContentStore.load] using [Document.storageKey].
+  Future<Uint8List> loadBytes(Document doc) async {
+    final content = doc.content;
+    if (content != null) {
+      return Uint8List.fromList(utf8.encode(content));
+    }
+    final key = doc.storageKey;
+    if (key == null || key.isEmpty) {
+      throw StateError('Document has no content or storage key');
+    }
+    return contentStore.load(key);
   }
 
   Future<void> deleteDocument(int documentId) async {

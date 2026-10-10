@@ -28,6 +28,19 @@ class _IoDocumentContentStore implements DocumentContentStore {
   }
 
   @override
+  Future<Uint8List> load(String storageKey) async {
+    if (storageKey.isEmpty) {
+      throw StateError('Empty storage key');
+    }
+    final docs = await getApplicationDocumentsDirectory();
+    final file = File(p.join(docs.path, storageKey));
+    if (!await file.exists()) {
+      throw StateError('Document file not found: $storageKey');
+    }
+    return Uint8List.fromList(await file.readAsBytes());
+  }
+
+  @override
   Future<void> delete(String? storageKey) async {
     if (storageKey == null || storageKey.isEmpty) return;
     try {

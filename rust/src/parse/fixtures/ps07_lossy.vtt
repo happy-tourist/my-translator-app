@@ -1,0 +1,10 @@
+WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+Valid first
+
+00:00:99.999 --> not-a-time
+Broken timing cue
+
+00:00:05.000 --> 00:00:07.000
+Valid second
