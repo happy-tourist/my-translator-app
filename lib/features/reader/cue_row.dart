@@ -1,20 +1,47 @@
 import 'package:flutter/material.dart';
 
+import 'package:my_translator_app/features/reader/cue_char_slice.dart';
 import 'package:my_translator_app/features/reader/cue_time_format.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart';
+import 'package:my_translator_app/src/rust/api/tokenize.dart';
 
 /// Shared cue row (timestamp + text_lines) for original and translation panes.
+///
+/// When [tokens] is non-null and non-empty on the original pane, word spans
+/// become tappable hit targets (`readerCueToken_*`). Translation pane must
+/// omit tokens (RT-08).
 class CueRow extends StatelessWidget {
   const CueRow({
     super.key,
     required this.cue,
     this.keyPrefix = 'readerCue',
+    this.cueListIndex,
+    this.tokens,
+    this.selectionStart,
+    this.selectionEnd,
+    this.flashTokenIndex,
+    this.onTokenTap,
   });
 
   final CueDto cue;
 
   /// Prefix for Keys: `readerCue` (original) / `readerTranslationCue`.
   final String keyPrefix;
+
+  /// Index in the original cues batch (for token Keys). Defaults to [cue.index].
+  final int? cueListIndex;
+
+  /// Word tokens for this cue (original pane only). Null/empty → plain text.
+  final List<TokenDto>? tokens;
+
+  /// Inclusive selection range within [tokens] when this cue is active.
+  final int? selectionStart;
+  final int? selectionEnd;
+
+  /// Brief gap-reset flash target (D5).
+  final int? flashTokenIndex;
+
+  final ValueChanged<int>? onTokenTap;
 
   @override
   Widget build(BuildContext context) {
@@ -23,6 +50,9 @@ class CueRow extends StatelessWidget {
     final time =
         '${formatCueTimestamp(cue.startMs)} → ${formatCueTimestamp(cue.endMs)}';
     final text = cue.textLines.join('\n');
+    final tokenList = tokens;
+    final selectable =
+        tokenList != null && tokenList.isNotEmpty && onTokenTap != null;
 
     return Padding(
       key: Key('${keyPrefix}_${cue.index}'),
@@ -36,13 +66,123 @@ class CueRow extends StatelessWidget {
             style: timeStyle,
           ),
           const SizedBox(height: 4),
-          Text(
-            text,
-            key: Key('${keyPrefix}Text_${cue.index}'),
-            style: bodyStyle,
-          ),
+          if (selectable)
+            _SelectableCueText(
+              cueText: text,
+              cueListIndex: cueListIndex ?? cue.index,
+              tokens: tokenList,
+              bodyStyle: bodyStyle,
+              textKey: Key('${keyPrefix}Text_${cue.index}'),
+              selectionStart: selectionStart,
+              selectionEnd: selectionEnd,
+              flashTokenIndex: flashTokenIndex,
+              onTokenTap: onTokenTap!,
+            )
+          else
+            Text(
+              text,
+              key: Key('${keyPrefix}Text_${cue.index}'),
+              style: bodyStyle,
+            ),
         ],
       ),
+    );
+  }
+}
+
+class _SelectableCueText extends StatelessWidget {
+  const _SelectableCueText({
+    required this.cueText,
+    required this.cueListIndex,
+    required this.tokens,
+    required this.bodyStyle,
+    required this.textKey,
+    required this.selectionStart,
+    required this.selectionEnd,
+    required this.flashTokenIndex,
+    required this.onTokenTap,
+  });
+
+  final String cueText;
+  final int cueListIndex;
+  final List<TokenDto> tokens;
+  final TextStyle? bodyStyle;
+  final Key textKey;
+  final int? selectionStart;
+  final int? selectionEnd;
+  final int? flashTokenIndex;
+  final ValueChanged<int> onTokenTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final selectedStyle = (bodyStyle ?? const TextStyle()).copyWith(
+      backgroundColor: scheme.primaryContainer,
+      color: scheme.onPrimaryContainer,
+    );
+    final flashStyle = (bodyStyle ?? const TextStyle()).copyWith(
+      backgroundColor: scheme.tertiaryContainer,
+      color: scheme.onTertiaryContainer,
+      fontWeight: FontWeight.w700,
+    );
+
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    final textCharLen = cueCharLength(cueText);
+    for (final token in tokens) {
+      final start = token.charStart;
+      final end = token.charEnd;
+      // DTO spans are Unicode scalar indices (design D2), not UTF-16.
+      if (start < cursor || end > textCharLen || start >= end) {
+        continue;
+      }
+      if (start > cursor) {
+        spans.add(
+          TextSpan(
+            text: cueCharSlice(cueText, cursor, start),
+            style: bodyStyle,
+          ),
+        );
+      }
+      final idx = token.tokenIndex;
+      final inSelection = selectionStart != null &&
+          selectionEnd != null &&
+          idx >= selectionStart! &&
+          idx <= selectionEnd!;
+      final flashing = flashTokenIndex == idx;
+      final style = flashing
+          ? flashStyle
+          : (inSelection ? selectedStyle : bodyStyle);
+      // WidgetSpan (not TextSpan+recognizer): Keys for D9 finders need a Widget.
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: GestureDetector(
+            key: Key('readerCueToken_${cueListIndex}_$idx'),
+            behavior: HitTestBehavior.translucent,
+            onTap: () => onTokenTap(idx),
+            child: Text(
+              cueCharSlice(cueText, start, end),
+              style: style,
+            ),
+          ),
+        ),
+      );
+      cursor = end;
+    }
+    if (cursor < textCharLen) {
+      spans.add(
+        TextSpan(
+          text: cueCharSlice(cueText, cursor, textCharLen),
+          style: bodyStyle,
+        ),
+      );
+    }
+
+    return Text.rich(
+      TextSpan(children: spans, style: bodyStyle),
+      key: textKey,
     );
   }
 }

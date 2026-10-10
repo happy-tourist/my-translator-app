@@ -6,12 +6,14 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show AnyhowException, PanicException;
 
 import 'package:my_translator_app/data/database/app_database.dart';
+import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
 import 'package:my_translator_app/features/reader/reader_screen.dart';
+import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
 
 export 'package:my_translator_app/data/library/parse_subtitles_fn.dart'
@@ -33,16 +35,22 @@ class LibraryScreen extends StatefulWidget {
     super.key,
     required this.folderRepository,
     required this.documentRepository,
+    required this.dictionaryRepository,
     this.filePicker,
     this.parseSubtitles,
+    this.tokenizeCues,
   });
 
   final FolderRepository folderRepository;
   final DocumentRepository documentRepository;
+  final DictionaryRepository dictionaryRepository;
   final LibraryFilePicker? filePicker;
 
   /// Defaults to generated FRB [rust_parse.parseSubtitles].
   final ParseSubtitlesFn? parseSubtitles;
+
+  /// Passed through to [ReaderScreen] (test seam; defaults to FRB there).
+  final TokenizeCuesFn? tokenizeCues;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -293,10 +301,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
             originalCues: parsed.cues,
             originalDocumentId: doc.id,
             documentRepository: widget.documentRepository,
+            dictionaryRepository: widget.dictionaryRepository,
             translationCues: translationCues,
             translationDocumentId: translationDocumentId,
             initialReadingAnchor: initialReadingAnchor,
             parseSubtitles: widget.parseSubtitles,
+            tokenizeCues: widget.tokenizeCues,
           ),
         ),
       );

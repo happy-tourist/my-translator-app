@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 382139460;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1267278839;
 
 // Section: executor
 
@@ -182,6 +182,39 @@ fn wire__crate__api__simple__process_text_impl(
         },
     )
 }
+fn wire__crate__api__tokenize__tokenize_cues_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "tokenize_cues",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_texts = <Vec<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::tokenize::tokenize_cues(api_texts))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 
 // Section: dart2rust
 
@@ -205,6 +238,18 @@ impl SseDecode for crate::api::parse::CueDto {
             start_ms: var_startMs,
             end_ms: var_endMs,
             text_lines: var_textLines,
+        };
+    }
+}
+
+impl SseDecode for crate::api::tokenize::CueTokensDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_cueIndex = <u32>::sse_decode(deserializer);
+        let mut var_tokens = <Vec<crate::api::tokenize::TokenDto>>::sse_decode(deserializer);
+        return crate::api::tokenize::CueTokensDto {
+            cue_index: var_cueIndex,
+            tokens: var_tokens,
         };
     }
 }
@@ -240,6 +285,20 @@ impl SseDecode for Vec<crate::api::parse::CueDto> {
     }
 }
 
+impl SseDecode for Vec<crate::api::tokenize::CueTokensDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::tokenize::CueTokensDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -247,6 +306,18 @@ impl SseDecode for Vec<u8> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<u8>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::tokenize::TokenDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::tokenize::TokenDto>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -285,6 +356,22 @@ impl SseDecode for crate::api::parse::ParsedSubtitles {
         return crate::api::parse::ParsedSubtitles {
             format: var_format,
             cues: var_cues,
+        };
+    }
+}
+
+impl SseDecode for crate::api::tokenize::TokenDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_surface = <String>::sse_decode(deserializer);
+        let mut var_charStart = <u32>::sse_decode(deserializer);
+        let mut var_charEnd = <u32>::sse_decode(deserializer);
+        let mut var_tokenIndex = <u32>::sse_decode(deserializer);
+        return crate::api::tokenize::TokenDto {
+            surface: var_surface,
+            char_start: var_charStart,
+            char_end: var_charEnd,
+            token_index: var_tokenIndex,
         };
     }
 }
@@ -335,6 +422,7 @@ fn pde_ffi_dispatcher_primary_impl(
         2 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
         3 => wire__crate__api__parse__parse_subtitles_impl(port, ptr, rust_vec_len, data_len),
         4 => wire__crate__api__simple__process_text_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__tokenize__tokenize_cues_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -368,6 +456,27 @@ impl flutter_rust_bridge::IntoDart for crate::api::parse::CueDto {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::parse::CueDto {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::parse::CueDto> for crate::api::parse::CueDto {
     fn into_into_dart(self) -> crate::api::parse::CueDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::tokenize::CueTokensDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.cue_index.into_into_dart().into_dart(),
+            self.tokens.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::tokenize::CueTokensDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::tokenize::CueTokensDto>
+    for crate::api::tokenize::CueTokensDto
+{
+    fn into_into_dart(self) -> crate::api::tokenize::CueTokensDto {
         self
     }
 }
@@ -415,6 +524,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::parse::ParsedSubtitles>
         self
     }
 }
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::tokenize::TokenDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.surface.into_into_dart().into_dart(),
+            self.char_start.into_into_dart().into_dart(),
+            self.char_end.into_into_dart().into_dart(),
+            self.token_index.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::tokenize::TokenDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::tokenize::TokenDto>
+    for crate::api::tokenize::TokenDto
+{
+    fn into_into_dart(self) -> crate::api::tokenize::TokenDto {
+        self
+    }
+}
 
 impl SseEncode for String {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -430,6 +562,14 @@ impl SseEncode for crate::api::parse::CueDto {
         <u64>::sse_encode(self.start_ms, serializer);
         <u64>::sse_encode(self.end_ms, serializer);
         <Vec<String>>::sse_encode(self.text_lines, serializer);
+    }
+}
+
+impl SseEncode for crate::api::tokenize::CueTokensDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.cue_index, serializer);
+        <Vec<crate::api::tokenize::TokenDto>>::sse_encode(self.tokens, serializer);
     }
 }
 
@@ -460,12 +600,32 @@ impl SseEncode for Vec<crate::api::parse::CueDto> {
     }
 }
 
+impl SseEncode for Vec<crate::api::tokenize::CueTokensDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::tokenize::CueTokensDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <u8>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::tokenize::TokenDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::tokenize::TokenDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -503,6 +663,16 @@ impl SseEncode for crate::api::parse::ParsedSubtitles {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.format, serializer);
         <Vec<crate::api::parse::CueDto>>::sse_encode(self.cues, serializer);
+    }
+}
+
+impl SseEncode for crate::api::tokenize::TokenDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.surface, serializer);
+        <u32>::sse_encode(self.char_start, serializer);
+        <u32>::sse_encode(self.char_end, serializer);
+        <u32>::sse_encode(self.token_index, serializer);
     }
 }
 

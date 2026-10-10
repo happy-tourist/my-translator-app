@@ -3,13 +3,21 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
 import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
+import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/features/upload/library_screen.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart';
+import 'package:my_translator_app/src/rust/api/tokenize.dart';
 
 import '../support/test_database.dart';
+
+Future<List<CueTokensDto>> _emptyTokenize(List<String> texts) async => [
+      for (var i = 0; i < texts.length; i++)
+        CueTokensDto(cueIndex: i, tokens: const []),
+    ];
 
 Uint8List _srtBytes([String text = 'Hi']) =>
     Uint8List.fromList(utf8.encode('1\n00:00:01,000 --> 00:00:02,000\n$text\n'));
@@ -31,11 +39,13 @@ void main() {
   late MemoryDocumentContentStore store;
   late FolderRepository folders;
   late DocumentRepository documents;
+  late DictionaryRepository dictionary;
 
   setUp(() {
     store = MemoryDocumentContentStore();
     folders = FolderRepository(db, contentStore: store);
     documents = DocumentRepository(db, contentStore: store);
+    dictionary = DictionaryRepository(db);
   });
 
   tearDownAll(() async {
@@ -51,14 +61,17 @@ void main() {
     WidgetTester tester, {
     LibraryFilePicker? filePicker,
     ParseSubtitlesFn? parseSubtitles,
+    TokenizeCuesFn? tokenizeCues,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: LibraryScreen(
           folderRepository: folders,
           documentRepository: documents,
+          dictionaryRepository: dictionary,
           filePicker: filePicker,
           parseSubtitles: parseSubtitles,
+          tokenizeCues: tokenizeCues ?? _emptyTokenize,
         ),
       ),
     );
@@ -80,6 +93,8 @@ void main() {
         home: LibraryScreen(
           folderRepository: folders,
           documentRepository: documents,
+          dictionaryRepository: dictionary,
+          tokenizeCues: _emptyTokenize,
         ),
       ),
     );

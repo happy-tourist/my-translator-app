@@ -5,6 +5,7 @@
 
 import 'api/parse.dart';
 import 'api/simple.dart';
+import 'api/tokenize.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -70,7 +71,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 382139460;
+  int get rustContentHash => 1267278839;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -92,6 +93,10 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Future<String> crateApiSimpleProcessText({required String input});
+
+  Future<List<CueTokensDto>> crateApiTokenizeTokenizeCues({
+    required List<String> texts,
+  });
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -221,6 +226,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimpleProcessTextConstMeta =>
       const TaskConstMeta(debugName: "process_text", argNames: ["input"]);
 
+  @override
+  Future<List<CueTokensDto>> crateApiTokenizeTokenizeCues({
+    required List<String> texts,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_String(texts, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_cue_tokens_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTokenizeTokenizeCuesConstMeta,
+        argValues: [texts],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTokenizeTokenizeCuesConstMeta =>
+      const TaskConstMeta(debugName: "tokenize_cues", argNames: ["texts"]);
+
   @protected
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -238,6 +273,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       startMs: dco_decode_u_64(arr[1]),
       endMs: dco_decode_u_64(arr[2]),
       textLines: dco_decode_list_String(arr[3]),
+    );
+  }
+
+  @protected
+  CueTokensDto dco_decode_cue_tokens_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return CueTokensDto(
+      cueIndex: dco_decode_u_32(arr[0]),
+      tokens: dco_decode_list_token_dto(arr[1]),
     );
   }
 
@@ -260,6 +307,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<CueTokensDto> dco_decode_list_cue_tokens_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_cue_tokens_dto).toList();
+  }
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as List<int>;
@@ -269,6 +322,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  List<TokenDto> dco_decode_list_token_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_token_dto).toList();
   }
 
   @protected
@@ -292,6 +351,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return ParsedSubtitles(
       format: dco_decode_String(arr[0]),
       cues: dco_decode_list_cue_dto(arr[1]),
+    );
+  }
+
+  @protected
+  TokenDto dco_decode_token_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return TokenDto(
+      surface: dco_decode_String(arr[0]),
+      charStart: dco_decode_u_32(arr[1]),
+      charEnd: dco_decode_u_32(arr[2]),
+      tokenIndex: dco_decode_u_32(arr[3]),
     );
   }
 
@@ -342,6 +415,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  CueTokensDto sse_decode_cue_tokens_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_cueIndex = sse_decode_u_32(deserializer);
+    var var_tokens = sse_decode_list_token_dto(deserializer);
+    return CueTokensDto(cueIndex: var_cueIndex, tokens: var_tokens);
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -372,6 +453,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<CueTokensDto> sse_decode_list_cue_tokens_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <CueTokensDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_cue_tokens_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -383,6 +478,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  List<TokenDto> sse_decode_list_token_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <TokenDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_token_dto(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -409,6 +516,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_format = sse_decode_String(deserializer);
     var var_cues = sse_decode_list_cue_dto(deserializer);
     return ParsedSubtitles(format: var_format, cues: var_cues);
+  }
+
+  @protected
+  TokenDto sse_decode_token_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_surface = sse_decode_String(deserializer);
+    var var_charStart = sse_decode_u_32(deserializer);
+    var var_charEnd = sse_decode_u_32(deserializer);
+    var var_tokenIndex = sse_decode_u_32(deserializer);
+    return TokenDto(
+      surface: var_surface,
+      charStart: var_charStart,
+      charEnd: var_charEnd,
+      tokenIndex: var_tokenIndex,
+    );
   }
 
   @protected
@@ -456,6 +578,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_cue_tokens_dto(CueTokensDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.cueIndex, serializer);
+    sse_encode_list_token_dto(self.tokens, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -480,6 +609,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_cue_tokens_dto(
+    List<CueTokensDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_cue_tokens_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_loose(
     List<int> self,
     SseSerializer serializer,
@@ -499,6 +640,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_list_token_dto(
+    List<TokenDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_token_dto(item, serializer);
+    }
   }
 
   @protected
@@ -528,6 +681,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.format, serializer);
     sse_encode_list_cue_dto(self.cues, serializer);
+  }
+
+  @protected
+  void sse_encode_token_dto(TokenDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.surface, serializer);
+    sse_encode_u_32(self.charStart, serializer);
+    sse_encode_u_32(self.charEnd, serializer);
+    sse_encode_u_32(self.tokenIndex, serializer);
   }
 
   @protected

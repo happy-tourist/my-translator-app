@@ -7,14 +7,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show AnyhowException, PanicException;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import 'package:my_translator_app/data/dictionary/dictionary_exceptions.dart';
+import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
 import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
+import 'package:my_translator_app/features/reader/cue_char_slice.dart';
 import 'package:my_translator_app/features/reader/cue_row.dart';
 import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
+import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
+import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
 
 /// Picked translation file for injectable Reader load (tests / file_picker).
 class PickedTranslationFile {
@@ -26,7 +31,7 @@ class PickedTranslationFile {
 
 typedef ReaderTranslationPicker = Future<PickedTranslationFile?> Function();
 
-/// Cues-first Reader with optional split mode (RS-01…RS-12).
+/// Cues-first Reader with optional split mode (RS-01…RS-12) and tap selection.
 class ReaderScreen extends StatefulWidget {
   const ReaderScreen({
     super.key,
@@ -34,10 +39,12 @@ class ReaderScreen extends StatefulWidget {
     required this.originalCues,
     required this.originalDocumentId,
     required this.documentRepository,
+    required this.dictionaryRepository,
     this.translationCues,
     this.translationDocumentId,
     this.initialReadingAnchor,
     this.parseSubtitles,
+    this.tokenizeCues,
     this.filePicker,
   });
 
@@ -45,6 +52,7 @@ class ReaderScreen extends StatefulWidget {
   final List<rust_parse.CueDto> originalCues;
   final int originalDocumentId;
   final DocumentRepository documentRepository;
+  final DictionaryRepository dictionaryRepository;
   final List<rust_parse.CueDto>? translationCues;
   final int? translationDocumentId;
 
@@ -53,6 +61,9 @@ class ReaderScreen extends StatefulWidget {
 
   /// Defaults to generated FRB [rust_parse.parseSubtitles].
   final ParseSubtitlesFn? parseSubtitles;
+
+  /// Defaults to generated FRB [rust_tokenize.tokenizeCues].
+  final TokenizeCuesFn? tokenizeCues;
 
   /// Defaults to [FilePicker.pickFiles].
   final ReaderTranslationPicker? filePicker;
@@ -65,6 +76,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   static const double _dividerHandleHeight = 16;
   static const double _minRatio = 0.2;
   static const double _maxRatio = 0.8;
+  static const Duration _gapFlashDuration = Duration(milliseconds: 300);
 
   var _splitEnabled = false;
   var _dividerRatio = 0.5;
@@ -76,6 +88,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
 
+  /// Batch tokenize cache (D4). Null while in-flight or after failure.
+  List<rust_tokenize.CueTokensDto>? _cueTokensByIndex;
+  var _tokenizeReady = false;
+
+  /// Selection: active cue + inclusive token range (D5). Null = empty.
+  int? _activeCueIndex;
+  int? _selectionStart;
+  int? _selectionEnd;
+  int? _flashTokenIndex;
+  Timer? _flashTimer;
+
   final _originalScrollController = ItemScrollController();
   final _translationScrollController = ItemScrollController();
   final _originalPositions = ItemPositionsListener.create();
@@ -84,11 +107,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
   ParseSubtitlesFn get _parse =>
       widget.parseSubtitles ?? rust_parse.parseSubtitles;
 
+  TokenizeCuesFn get _tokenize =>
+      widget.tokenizeCues ??
+      ((texts) => rust_tokenize.tokenizeCues(texts: texts));
+
   bool get _hasTranslationCues =>
       _translationCues != null && _translationCues!.isNotEmpty;
 
   /// Linked translation exists in Drift (may lack cues after failed restore).
   bool get _hasLinkedTranslation => _translationDocumentId != null;
+
+  bool get _hasSelection =>
+      _activeCueIndex != null &&
+      _selectionStart != null &&
+      _selectionEnd != null;
 
   @override
   void initState() {
@@ -98,14 +130,217 @@ class _ReaderScreenState extends State<ReaderScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _restoreInitialReadingAnchor();
     });
+    unawaited(_runBatchTokenize());
   }
 
   @override
   void dispose() {
+    _flashTimer?.cancel();
     // RS-12 / D10: best-effort save on pop/dispose (do not block).
     // Force: skip `_syncing` guard — pop must still persist even mid-sync.
     unawaited(_persistReadingAnchor(force: true));
     super.dispose();
+  }
+
+  Future<void> _runBatchTokenize() async {
+    final texts = widget.originalCues
+        .map((c) => c.textLines.join('\n'))
+        .toList(growable: false);
+    try {
+      final result = await _tokenize(texts);
+      if (!mounted) return;
+      // Normalize to list indexed by cue position (same order as input).
+      final byIndex = List<rust_tokenize.CueTokensDto?>.filled(
+        texts.length,
+        null,
+      );
+      for (final dto in result) {
+        if (dto.cueIndex >= 0 && dto.cueIndex < byIndex.length) {
+          byIndex[dto.cueIndex] = dto;
+        }
+      }
+      final cached = <rust_tokenize.CueTokensDto>[];
+      for (var i = 0; i < byIndex.length; i++) {
+        cached.add(
+          byIndex[i] ??
+              rust_tokenize.CueTokensDto(cueIndex: i, tokens: const []),
+        );
+      }
+      setState(() {
+        _cueTokensByIndex = cached;
+        _tokenizeReady = true;
+      });
+    } on AnyhowException catch (e) {
+      assert(() {
+        debugPrint('tokenizeCues Anyhow: ${e.message}');
+        return true;
+      }());
+      _failTokenizeBatch();
+    } on PanicException catch (e) {
+      assert(() {
+        debugPrint('tokenizeCues panic: ${e.message}');
+        return true;
+      }());
+      _failTokenizeBatch();
+    } catch (e, st) {
+      assert(() {
+        debugPrint('tokenizeCues failed: $e\n$st');
+        return true;
+      }());
+      _failTokenizeBatch();
+    }
+  }
+
+  /// RT-13 / D4: plain text + SnackBar; no token selection.
+  void _failTokenizeBatch() {
+    if (!mounted) return;
+    setState(() {
+      _cueTokensByIndex = null;
+      _tokenizeReady = false;
+      _clearSelection(updateState: false);
+    });
+    _showTokenizeError();
+  }
+
+  void _showTokenizeError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        key: Key('readerTokenizeErrorSnack'),
+        content: Text('Could not prepare word selection'),
+      ),
+    );
+  }
+
+  void _clearSelection({bool updateState = true}) {
+    _flashTimer?.cancel();
+    _flashTimer = null;
+    _activeCueIndex = null;
+    _selectionStart = null;
+    _selectionEnd = null;
+    _flashTokenIndex = null;
+    if (updateState && mounted) setState(() {});
+  }
+
+  void _startFlash(int tokenIndex) {
+    _flashTimer?.cancel();
+    _flashTokenIndex = tokenIndex;
+    _flashTimer = Timer(_gapFlashDuration, () {
+      if (!mounted) return;
+      setState(() => _flashTokenIndex = null);
+    });
+  }
+
+  void _onOriginalTokenTap(int cueIndex, int tokenIndex) {
+    if (!_tokenizeReady || _cueTokensByIndex == null) return;
+    if (cueIndex < 0 || cueIndex >= _cueTokensByIndex!.length) return;
+    final tokens = _cueTokensByIndex![cueIndex].tokens;
+    if (tokenIndex < 0 || tokenIndex >= tokens.length) return;
+
+    setState(() {
+      void clearFlash() {
+        _flashTimer?.cancel();
+        _flashTimer = null;
+        _flashTokenIndex = null;
+      }
+
+      // Other cue → clear previous, start new anchor (no gap-flash).
+      if (_activeCueIndex != null && _activeCueIndex != cueIndex) {
+        clearFlash();
+        _activeCueIndex = cueIndex;
+        _selectionStart = tokenIndex;
+        _selectionEnd = tokenIndex;
+        return;
+      }
+
+      _activeCueIndex = cueIndex;
+      final start = _selectionStart;
+      final end = _selectionEnd;
+
+      // Empty → select [T,T].
+      if (start == null || end == null) {
+        clearFlash();
+        _selectionStart = tokenIndex;
+        _selectionEnd = tokenIndex;
+        return;
+      }
+
+      final t = tokenIndex;
+      // Expand adjacent.
+      if (t == start - 1 || t == end + 1) {
+        clearFlash();
+        _selectionStart = t < start ? t : start;
+        _selectionEnd = t > end ? t : end;
+        return;
+      }
+
+      // Inside multi-word range → shrink to [T,T].
+      if (t >= start && t <= end && (end - start) >= 1) {
+        clearFlash();
+        _selectionStart = t;
+        _selectionEnd = t;
+        return;
+      }
+
+      // Single selected word tapped again → no-op.
+      if (t == start && t == end) {
+        return;
+      }
+
+      // Gap → reset to [T,T] + flash.
+      _selectionStart = t;
+      _selectionEnd = t;
+      _startFlash(t);
+    });
+  }
+
+  /// Contiguous cue substring for selection (RT-10).
+  String? _selectedPhraseSurface() {
+    if (!_hasSelection || _cueTokensByIndex == null) return null;
+    final cueIndex = _activeCueIndex!;
+    if (cueIndex < 0 || cueIndex >= widget.originalCues.length) return null;
+    final cueText = widget.originalCues[cueIndex].textLines.join('\n');
+    final tokens = _cueTokensByIndex![cueIndex].tokens;
+    final start = _selectionStart!;
+    final end = _selectionEnd!;
+    if (start > end) return null;
+    // Batch tokens are dense 0..n-1 in order (api TokenDto.token_index).
+    if (start < 0 || end >= tokens.length) return null;
+    final startTok = tokens[start];
+    final endTok = tokens[end];
+    // DTO char spans are Unicode scalars (design D2), not UTF-16 code units.
+    return cueCharSlice(cueText, startTok.charStart, endTok.charEnd);
+  }
+
+  String? _activeCueText() {
+    if (!_hasSelection) return null;
+    final cueIndex = _activeCueIndex!;
+    if (cueIndex < 0 || cueIndex >= widget.originalCues.length) return null;
+    return widget.originalCues[cueIndex].textLines.join('\n');
+  }
+
+  Future<void> _openAddVocabSheet() async {
+    final phrase = _selectedPhraseSurface();
+    final cueText = _activeCueText();
+    if (phrase == null || phrase.isEmpty || cueText == null) return;
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return _AddVocabSheet(
+          surface: phrase,
+          initialContext: cueText,
+          dictionaryRepository: widget.dictionaryRepository,
+        );
+      },
+    );
+
+    if (!mounted) return;
+    if (saved == true) {
+      // D6: close sheet (done); clear selection; no lemma highlight refresh.
+      _clearSelection();
+    }
   }
 
   void _showError(String message) {
@@ -457,6 +692,31 @@ class _ReaderScreenState extends State<ReaderScreen> {
         ],
       ),
       body: _splitEnabled ? _buildSplitBody() : _buildSinglePane(),
+      // D6: CTA when selection non-empty; sheet/save is block 3.
+      bottomNavigationBar: _hasSelection ? _buildAddVocabCta() : null,
+    );
+  }
+
+  Widget _buildAddVocabCta() {
+    final phrase = _selectedPhraseSurface();
+    return Material(
+      elevation: 8,
+      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              key: const Key('readerAddVocabCta'),
+              onPressed: phrase == null || phrase.isEmpty
+                  ? null
+                  : _openAddVocabSheet,
+              child: const Text('Add to vocabulary'),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -647,8 +907,184 @@ class _ReaderScreenState extends State<ReaderScreen> {
         padding: const EdgeInsets.symmetric(vertical: 8),
         itemCount: cues.length,
         itemBuilder: (context, index) {
-          return CueRow(cue: cues[index], keyPrefix: keyPrefix);
+          // RT-08: token selection only on original pane.
+          final tokensReady = fromOriginal &&
+              _tokenizeReady &&
+              _cueTokensByIndex != null &&
+              index < _cueTokensByIndex!.length;
+          final tokens =
+              tokensReady ? _cueTokensByIndex![index].tokens : null;
+          final isActive =
+              fromOriginal && _hasSelection && _activeCueIndex == index;
+          return CueRow(
+            cue: cues[index],
+            keyPrefix: keyPrefix,
+            cueListIndex: fromOriginal ? index : null,
+            tokens: tokens,
+            selectionStart: isActive ? _selectionStart : null,
+            selectionEnd: isActive ? _selectionEnd : null,
+            flashTokenIndex: isActive ? _flashTokenIndex : null,
+            onTokenTap: tokensReady && tokens != null && tokens.isNotEmpty
+                ? (tokenIndex) => _onOriginalTokenTap(index, tokenIndex)
+                : null,
+          );
         },
+      ),
+    );
+  }
+}
+
+/// Bottom sheet to add Reader selection to vocabulary (D6 / RT-05…RT-07).
+class _AddVocabSheet extends StatefulWidget {
+  const _AddVocabSheet({
+    required this.surface,
+    required this.initialContext,
+    required this.dictionaryRepository,
+  });
+
+  final String surface;
+  final String initialContext;
+  final DictionaryRepository dictionaryRepository;
+
+  @override
+  State<_AddVocabSheet> createState() => _AddVocabSheetState();
+}
+
+class _AddVocabSheetState extends State<_AddVocabSheet> {
+  late final TextEditingController _translationController;
+  late final TextEditingController _contextController;
+  String? _validationError;
+  var _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _translationController = TextEditingController();
+    _contextController = TextEditingController(text: widget.initialContext);
+  }
+
+  @override
+  void dispose() {
+    _translationController.dispose();
+    _contextController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onSave() async {
+    final trimmedTranslation = _translationController.text.trim();
+    // RT-07 / D6: empty translation → validation error, no persist.
+    if (trimmedTranslation.isEmpty) {
+      setState(() {
+        _validationError = 'Translation must not be empty';
+      });
+      return;
+    }
+
+    setState(() {
+      _validationError = null;
+      _saving = true;
+    });
+
+    try {
+      await widget.dictionaryRepository.add(
+        lemma: widget.surface,
+        translation: trimmedTranslation,
+        context: _contextController.text,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on DictionaryValidationException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _validationError = e.message;
+      });
+    } catch (e, st) {
+      assert(() {
+        debugPrint('dict persist from Reader: $e\n$st');
+        return true;
+      }());
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't save. Try again.")),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final theme = Theme.of(context);
+
+    return Padding(
+      key: const Key('readerAddVocabSheet'),
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Add to vocabulary',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            InputDecorator(
+              key: const Key('readerAddVocabSurface'),
+              decoration: const InputDecoration(
+                labelText: 'Word / phrase',
+                border: OutlineInputBorder(),
+              ),
+              child: Text(widget.surface),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('readerAddVocabTranslation'),
+              controller: _translationController,
+              decoration: const InputDecoration(
+                labelText: 'Translation',
+                border: OutlineInputBorder(),
+              ),
+              textInputAction: TextInputAction.next,
+              enabled: !_saving,
+              autofocus: true,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('readerAddVocabContext'),
+              controller: _contextController,
+              decoration: const InputDecoration(
+                labelText: 'Context',
+                border: OutlineInputBorder(),
+              ),
+              minLines: 2,
+              maxLines: 4,
+              enabled: !_saving,
+            ),
+            if (_validationError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _validationError!,
+                key: const Key('readerAddVocabValidationError'),
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              key: const Key('readerAddVocabSave'),
+              onPressed: _saving ? null : _onSave,
+              child: _saving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
+          ],
+        ),
       ),
     );
   }

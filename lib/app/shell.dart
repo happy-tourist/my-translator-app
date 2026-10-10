@@ -57,6 +57,7 @@ class _AppShellState extends State<AppShell> {
       LibraryScreen(
         folderRepository: _folders,
         documentRepository: _documents,
+        dictionaryRepository: _dictionary,
       ),
       VocabularyScreen(dictionaryRepository: _dictionary),
     ];

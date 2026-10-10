@@ -8,6 +8,7 @@
 
 import 'api/parse.dart';
 import 'api/simple.dart';
+import 'api/tokenize.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -31,6 +32,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CueDto dco_decode_cue_dto(dynamic raw);
 
   @protected
+  CueTokensDto dco_decode_cue_tokens_dto(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -40,10 +44,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<CueDto> dco_decode_list_cue_dto(dynamic raw);
 
   @protected
+  List<CueTokensDto> dco_decode_list_cue_tokens_dto(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<TokenDto> dco_decode_list_token_dto(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -53,6 +63,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ParsedSubtitles dco_decode_parsed_subtitles(dynamic raw);
+
+  @protected
+  TokenDto dco_decode_token_dto(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -73,6 +86,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CueDto sse_decode_cue_dto(SseDeserializer deserializer);
 
   @protected
+  CueTokensDto sse_decode_cue_tokens_dto(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -82,10 +98,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<CueDto> sse_decode_list_cue_dto(SseDeserializer deserializer);
 
   @protected
+  List<CueTokensDto> sse_decode_list_cue_tokens_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<TokenDto> sse_decode_list_token_dto(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -95,6 +119,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ParsedSubtitles sse_decode_parsed_subtitles(SseDeserializer deserializer);
+
+  @protected
+  TokenDto sse_decode_token_dto(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -118,6 +145,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_cue_dto(CueDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_cue_tokens_dto(CueTokensDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -127,6 +157,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_list_cue_dto(List<CueDto> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_cue_tokens_dto(
+    List<CueTokensDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -134,6 +170,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     Uint8List self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_list_token_dto(List<TokenDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
@@ -149,6 +188,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ParsedSubtitles self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_token_dto(TokenDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
