@@ -20,6 +20,9 @@ class Documents extends Table {
   TextColumn get storageKey => text().nullable()();
   /// Inline file bytes/text for Web (and optional native fallback).
   TextColumn get content => text().nullable()();
+  /// Linked hidden translation document (`reader/split`); set on the original.
+  IntColumn get translationDocumentId =>
+      integer().nullable().references(Documents, #id)();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
 }

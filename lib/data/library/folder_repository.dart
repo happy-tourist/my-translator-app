@@ -69,6 +69,14 @@ class FolderRepository {
         .toList();
 
     await _db.transaction(() async {
+      // Clear self-FK links before bulk delete (translationDocumentId → Documents.id).
+      await (_db.update(_db.documents)
+            ..where((d) => d.folderId.isIn(subtreeIds)))
+          .write(
+            const DocumentsCompanion(
+              translationDocumentId: Value(null),
+            ),
+          );
       await (_db.delete(
         _db.documents,
       )..where((d) => d.folderId.isIn(subtreeIds))).go();

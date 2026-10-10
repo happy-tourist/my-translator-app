@@ -26,9 +26,9 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Current vs target
 
-**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`). Rust: `rust/src/parse/` + `api/parse.rs` (плюс scaffold `process_text` / `add_numbers`, не home UI).
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`). Rust: `rust/src/parse/` + `api/parse.rs` (плюс scaffold `process_text` / `add_numbers`, не home UI).
 
-**Ещё target:** tokenize / lemma highlight / word card / split / offline translate — следующие changes.
+**Ещё target:** tokenize / lemma highlight / word card / offline translate; Rust cue pairing for index-aligned split — следующие changes.
 
 ---
 
@@ -39,7 +39,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 1. **Чтение субтитров** — загрузка SRT / VTT / ASS(SSA); парсинг в Rust; построчное отображение в Flutter.
 2. **Изучение слов по тапу** — тап по слову или выделение фразы → перевод, лемма, «добавить в словарь».
 3. **Подсветка знакомых слов** — записи словаря подсвечиваются в тексте; матч по лемме (`run` / `running` / `ran` = одно слово).
-4. **Разделённый экран** — сверху оригинал, снизу перевод; построчный синхронный скролл.
+4. **Разделённый экран** — сверху оригинал, снизу файл перевода; sync по ближайшему `startMs` (MVP), позже — по индексу при pairing.
 5. **Работа с ИИ** (опционально, позже) — перевод фраз, фразовые глаголы, контекст; разные провайдеры через API.
 6. **Офлайн-перевод** — базовый перевод слов/фраз без интернета.
 
@@ -51,15 +51,15 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 - Подсветка сохранённых слов с учётом морфологии
 - Тап → карточка перевода + «добавить в словарь»
 - Выделение фразы → перевод фразы целиком
-- Split view: оригинал + перевод, sync scroll
+- Split view: оригинал + файл перевода, sync scroll (MVP: nearest `startMs`)
 - Опциональный ИИ для перевода/объяснений
 - Локальное хранение (папки/документы библиотеки, словарь, настройки later) — **Drift** в Flutter (`lib/`)
 - Работа офлайн
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import / open→Reader) + **Vocab** (CRUD); cues-first Reader; Drift schema + repositories (`loadBytes` / content store `load`)
-- Rust: `parse/` + FRB `parse_subtitles`; scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
+- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD); cues-first Reader with split toggle / load-delete translation / time sync; Drift schema v2 (`translationDocumentId`) + repositories (`attachTranslation` / `loadBytes` / content store)
+- Rust: `parse/` + FRB `parse_subtitles` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold)
 
 ---
@@ -122,9 +122,9 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 
 ### UX areas
 
-**Сейчас:** Library (папки / import / open), cues-first Reader (таймкоды + текст), Vocab CRUD.
+**Сейчас:** Library (папки / import / open + linked translation restore), cues-first Reader (таймкоды + текст, optional horizontal split + sync), Vocab CRUD.
 
-**Target (later):** тап/выделение + подсветка по лемме, карточка слова/фразы, split view, настройки (языки, опциональный ИИ).
+**Target (later):** тап/выделение + подсветка по лемме, карточка слова/фразы, index-aligned paired split, настройки (языки, опциональный ИИ).
 
 Роутера и state-management пакетов (Provider/Riverpod/Bloc) пока нет — `Navigator` + screen state.
 

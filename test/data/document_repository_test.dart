@@ -167,4 +167,104 @@ void main() {
     final loaded = await keyDocs.loadBytes(doc);
     expect(loaded, bytes);
   });
+
+  test('LD-12: Hidden translation not listed', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: _srtBytes('перевод'),
+    );
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.id), [original.id]);
+    expect(listed.map((d) => d.id), isNot(contains(translation.id)));
+    expect(await documents.getById(translation.id), isNotNull);
+  });
+
+  test('LD-13: Persist translation linked to original', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    final translationBytes = _srtBytes('перевод');
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: translationBytes,
+    );
+    expect(translation.folderId, folder.id);
+    expect(translation.title, 'ru');
+    expect(translation.format, 'srt');
+
+    final reloadedOriginal = await documents.getById(original.id);
+    expect(reloadedOriginal!.translationDocumentId, translation.id);
+
+    final linked = await documents.loadLinkedTranslation(reloadedOriginal);
+    expect(linked, isNotNull);
+    expect(linked!.id, translation.id);
+    final loaded = await documents.loadBytes(linked);
+    expect(utf8.decode(loaded), contains('перевод'));
+  });
+
+  test('LD-14: Delete translation unlinks and removes', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: _srtBytes('перевод'),
+    );
+    final translationStorageKey = translation.storageKey;
+
+    await documents.detachAndDeleteTranslation(original.id);
+
+    final reloadedOriginal = await documents.getById(original.id);
+    expect(reloadedOriginal, isNotNull);
+    expect(reloadedOriginal!.translationDocumentId, isNull);
+    expect(await documents.getById(translation.id), isNull);
+
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.id), [original.id]);
+
+    if (translationStorageKey != null) {
+      expect(store.files.containsKey(translationStorageKey), isFalse);
+    }
+  });
+
+  test('LD-15: Delete original cascades translation', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final keep = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'keep.srt',
+      bytes: _srtBytes('keep'),
+    );
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: _srtBytes('перевод'),
+    );
+
+    await documents.deleteDocument(original.id);
+
+    expect(await documents.getById(original.id), isNull);
+    expect(await documents.getById(translation.id), isNull);
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.id), [keep.id]);
+  });
 }

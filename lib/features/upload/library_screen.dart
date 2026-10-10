@@ -3,14 +3,19 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show PanicException;
+    show AnyhowException, PanicException;
 
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
+import 'package:my_translator_app/data/library/parse_error_messages.dart';
+import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
 import 'package:my_translator_app/features/reader/reader_screen.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
+
+export 'package:my_translator_app/data/library/parse_subtitles_fn.dart'
+    show ParseSubtitlesFn;
 
 /// Picked file payload for injectable import (tests / file_picker).
 class PickedLibraryFile {
@@ -21,13 +26,6 @@ class PickedLibraryFile {
 }
 
 typedef LibraryFilePicker = Future<PickedLibraryFile?> Function();
-
-/// Injectable FRB parse seam for widget tests (frb-boundary).
-typedef ParseSubtitlesFn =
-    Future<rust_parse.ParsedSubtitles> Function({
-      required List<int> bytes,
-      String? formatHint,
-    });
 
 /// Minimal library UI: folder nav, create, import, cascade delete confirm (D8).
 class LibraryScreen extends StatefulWidget {
@@ -97,22 +95,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   void _showError(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(key: const Key('libraryErrorSnack'), content: Text(message)),
     );
-  }
-
-  String _messageForParseError(rust_parse.ParseErrorKind kind) {
-    switch (kind) {
-      case rust_parse.ParseErrorKind.unsupportedFormat:
-        return 'Unsupported or unrecognized subtitle format';
-      case rust_parse.ParseErrorKind.encoding:
-        return 'File encoding is not valid UTF-8';
-      case rust_parse.ParseErrorKind.empty:
-        return 'No subtitle cues found in this file';
-      case rust_parse.ParseErrorKind.malformed:
-        return 'Could not parse this subtitle file';
-    }
   }
 
   Future<void> _createFolder() async {
@@ -255,31 +241,71 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (!mounted) return;
       // RC-05 / D4: never push Reader with zero cues (Rust should Err Empty).
       if (parsed.cues.isEmpty) {
-        _showError(_messageForParseError(rust_parse.ParseErrorKind.empty));
+        _showError(messageForParseError(rust_parse.ParseErrorKind.empty));
         return;
       }
+
+      // LD-16 / RS-09: best-effort linked translation; failure must not block.
+      // Always pass translationDocumentId when a link exists so Reader can
+      // delete a stuck/unreadable satellite (empty pane → Delete → Load).
+      List<rust_parse.CueDto>? translationCues;
+      final translationDocumentId = doc.translationDocumentId;
+      if (translationDocumentId != null) {
+        try {
+          final linked =
+              await widget.documentRepository.loadLinkedTranslation(doc);
+          if (linked != null) {
+            final tBytes = await widget.documentRepository.loadBytes(linked);
+            final tParsed = await _parse(
+              bytes: tBytes,
+              formatHint: linked.format,
+            );
+            if (tParsed.cues.isNotEmpty) {
+              translationCues = tParsed.cues;
+            }
+          }
+        } catch (e, st) {
+          assert(() {
+            debugPrint('Linked translation open failed (ignored): $e\n$st');
+            return true;
+          }());
+        }
+      }
+
+      if (!mounted) return;
       setState(() => _opening = false);
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => ReaderScreen(title: doc.title, cues: parsed.cues),
+          builder: (_) => ReaderScreen(
+            title: doc.title,
+            originalCues: parsed.cues,
+            originalDocumentId: doc.id,
+            documentRepository: widget.documentRepository,
+            translationCues: translationCues,
+            translationDocumentId: translationDocumentId,
+            parseSubtitles: widget.parseSubtitles,
+          ),
         ),
       );
     } on rust_parse.ParseErrorKind catch (kind) {
-      if (!mounted) return;
-      _showError(_messageForParseError(kind));
+      _showError(messageForParseError(kind));
+    } on AnyhowException catch (e) {
+      assert(() {
+        debugPrint('FRB Anyhow opening document: ${e.message}');
+        return true;
+      }());
+      _showError('Could not load document');
     } on PanicException catch (e) {
       assert(() {
         debugPrint('Rust panic opening document: ${e.message}');
         return true;
       }());
-      if (!mounted) return;
       _showError('Could not load document');
     } catch (e, st) {
       assert(() {
         debugPrint('Open document failed: $e\n$st');
         return true;
       }());
-      if (!mounted) return;
       _showError('Could not load document');
     } finally {
       if (mounted && _opening) {

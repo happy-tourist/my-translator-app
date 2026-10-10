@@ -219,4 +219,79 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('LD-12: Hidden translation not listed in folder UI', (tester) async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: _srtBytes('перевод'),
+    );
+
+    await pumpLibrary(tester);
+    await tester.tap(find.byKey(Key('libraryFolder_${folder.id}')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(Key('libraryDocument_${original.id}')), findsOneWidget);
+    expect(find.text('original'), findsOneWidget);
+    expect(find.byKey(Key('libraryDocument_${translation.id}')), findsNothing);
+    expect(find.text('ru'), findsNothing);
+  });
+
+  testWidgets('LD-16 / RS-09: Open original loads linked translation for Reader', (
+    tester,
+  ) async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original cue'),
+    );
+    await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: _srtBytes('translation cue'),
+    );
+
+    await pumpLibrary(
+      tester,
+      parseSubtitles: ({required bytes, formatHint}) async {
+        final text = utf8.decode(bytes);
+        final cueText = text.contains('translation cue')
+            ? 'translation cue'
+            : 'original cue';
+        return ParsedSubtitles(
+          format: 'srt',
+          cues: [
+            CueDto(
+              index: 0,
+              startMs: BigInt.from(1000),
+              endMs: BigInt.from(2000),
+              textLines: [cueText],
+            ),
+          ],
+        );
+      },
+    );
+    await tester.tap(find.byKey(Key('libraryFolder_${folder.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('libraryDocument_${original.id}')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerScreen')), findsOneWidget);
+    expect(find.text('original cue'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerTranslationCueList')), findsOneWidget);
+    expect(find.text('translation cue'), findsOneWidget);
+    expect(find.byKey(const Key('readerTranslationEmpty')), findsNothing);
+    expect(find.byKey(const Key('readerTranslationLoad')), findsNothing);
+  });
 }

@@ -425,6 +425,19 @@ class $DocumentsTable extends Documents
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _translationDocumentIdMeta =
+      const VerificationMeta('translationDocumentId');
+  @override
+  late final GeneratedColumn<int> translationDocumentId = GeneratedColumn<int>(
+    'translation_document_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES documents (id)',
+    ),
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -457,6 +470,7 @@ class $DocumentsTable extends Documents
     format,
     storageKey,
     content,
+    translationDocumentId,
     createdAt,
     updatedAt,
   ];
@@ -511,6 +525,15 @@ class $DocumentsTable extends Documents
         content.isAcceptableOrUnknown(data['content']!, _contentMeta),
       );
     }
+    if (data.containsKey('translation_document_id')) {
+      context.handle(
+        _translationDocumentIdMeta,
+        translationDocumentId.isAcceptableOrUnknown(
+          data['translation_document_id']!,
+          _translationDocumentIdMeta,
+        ),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -556,6 +579,10 @@ class $DocumentsTable extends Documents
         DriftSqlType.string,
         data['${effectivePrefix}content'],
       ),
+      translationDocumentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}translation_document_id'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -586,6 +613,9 @@ class Document extends DataClass implements Insertable<Document> {
 
   /// Inline file bytes/text for Web (and optional native fallback).
   final String? content;
+
+  /// Linked hidden translation document (`reader/split`); set on the original.
+  final int? translationDocumentId;
   final DateTime createdAt;
   final DateTime updatedAt;
   const Document({
@@ -595,6 +625,7 @@ class Document extends DataClass implements Insertable<Document> {
     required this.format,
     this.storageKey,
     this.content,
+    this.translationDocumentId,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -610,6 +641,9 @@ class Document extends DataClass implements Insertable<Document> {
     }
     if (!nullToAbsent || content != null) {
       map['content'] = Variable<String>(content);
+    }
+    if (!nullToAbsent || translationDocumentId != null) {
+      map['translation_document_id'] = Variable<int>(translationDocumentId);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
@@ -628,6 +662,9 @@ class Document extends DataClass implements Insertable<Document> {
       content: content == null && nullToAbsent
           ? const Value.absent()
           : Value(content),
+      translationDocumentId: translationDocumentId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(translationDocumentId),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -645,6 +682,9 @@ class Document extends DataClass implements Insertable<Document> {
       format: serializer.fromJson<String>(json['format']),
       storageKey: serializer.fromJson<String?>(json['storageKey']),
       content: serializer.fromJson<String?>(json['content']),
+      translationDocumentId: serializer.fromJson<int?>(
+        json['translationDocumentId'],
+      ),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -659,6 +699,7 @@ class Document extends DataClass implements Insertable<Document> {
       'format': serializer.toJson<String>(format),
       'storageKey': serializer.toJson<String?>(storageKey),
       'content': serializer.toJson<String?>(content),
+      'translationDocumentId': serializer.toJson<int?>(translationDocumentId),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -671,6 +712,7 @@ class Document extends DataClass implements Insertable<Document> {
     String? format,
     Value<String?> storageKey = const Value.absent(),
     Value<String?> content = const Value.absent(),
+    Value<int?> translationDocumentId = const Value.absent(),
     DateTime? createdAt,
     DateTime? updatedAt,
   }) => Document(
@@ -680,6 +722,9 @@ class Document extends DataClass implements Insertable<Document> {
     format: format ?? this.format,
     storageKey: storageKey.present ? storageKey.value : this.storageKey,
     content: content.present ? content.value : this.content,
+    translationDocumentId: translationDocumentId.present
+        ? translationDocumentId.value
+        : this.translationDocumentId,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -693,6 +738,9 @@ class Document extends DataClass implements Insertable<Document> {
           ? data.storageKey.value
           : this.storageKey,
       content: data.content.present ? data.content.value : this.content,
+      translationDocumentId: data.translationDocumentId.present
+          ? data.translationDocumentId.value
+          : this.translationDocumentId,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -707,6 +755,7 @@ class Document extends DataClass implements Insertable<Document> {
           ..write('format: $format, ')
           ..write('storageKey: $storageKey, ')
           ..write('content: $content, ')
+          ..write('translationDocumentId: $translationDocumentId, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -721,6 +770,7 @@ class Document extends DataClass implements Insertable<Document> {
     format,
     storageKey,
     content,
+    translationDocumentId,
     createdAt,
     updatedAt,
   );
@@ -734,6 +784,7 @@ class Document extends DataClass implements Insertable<Document> {
           other.format == this.format &&
           other.storageKey == this.storageKey &&
           other.content == this.content &&
+          other.translationDocumentId == this.translationDocumentId &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -745,6 +796,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
   final Value<String> format;
   final Value<String?> storageKey;
   final Value<String?> content;
+  final Value<int?> translationDocumentId;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   const DocumentsCompanion({
@@ -754,6 +806,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.format = const Value.absent(),
     this.storageKey = const Value.absent(),
     this.content = const Value.absent(),
+    this.translationDocumentId = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
   });
@@ -764,6 +817,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     required String format,
     this.storageKey = const Value.absent(),
     this.content = const Value.absent(),
+    this.translationDocumentId = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
   }) : folderId = Value(folderId),
@@ -776,6 +830,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Expression<String>? format,
     Expression<String>? storageKey,
     Expression<String>? content,
+    Expression<int>? translationDocumentId,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
   }) {
@@ -786,6 +841,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
       if (format != null) 'format': format,
       if (storageKey != null) 'storage_key': storageKey,
       if (content != null) 'content': content,
+      if (translationDocumentId != null)
+        'translation_document_id': translationDocumentId,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
     });
@@ -798,6 +855,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Value<String>? format,
     Value<String?>? storageKey,
     Value<String?>? content,
+    Value<int?>? translationDocumentId,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
   }) {
@@ -808,6 +866,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
       format: format ?? this.format,
       storageKey: storageKey ?? this.storageKey,
       content: content ?? this.content,
+      translationDocumentId:
+          translationDocumentId ?? this.translationDocumentId,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -834,6 +894,11 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     if (content.present) {
       map['content'] = Variable<String>(content.value);
     }
+    if (translationDocumentId.present) {
+      map['translation_document_id'] = Variable<int>(
+        translationDocumentId.value,
+      );
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -852,6 +917,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
           ..write('format: $format, ')
           ..write('storageKey: $storageKey, ')
           ..write('content: $content, ')
+          ..write('translationDocumentId: $translationDocumentId, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -1672,6 +1738,7 @@ typedef $$DocumentsTableCreateCompanionBuilder = DocumentsCompanion Function({
   required String format,
   Value<String?> storageKey,
   Value<String?> content,
+  Value<int?> translationDocumentId,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
 });
@@ -1682,6 +1749,7 @@ typedef $$DocumentsTableUpdateCompanionBuilder = DocumentsCompanion Function({
   Value<String> format,
   Value<String?> storageKey,
   Value<String?> content,
+  Value<int?> translationDocumentId,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
 });
@@ -1701,6 +1769,26 @@ final class $$DocumentsTableReferences
       $_db.folders,
     ).filter((f) => f.id.sqlEquals($_column));
     final item = $_typedResult.readTableOrNull(_folderIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $DocumentsTable _translationDocumentIdTable(_$AppDatabase db) => db
+      .documents
+      .createAlias('documents__translation_document_id__documents__id');
+
+  $$DocumentsTableProcessedTableManager? get translationDocumentId {
+    final $_column = $_itemColumn<int>('translation_document_id');
+    if ($_column == null) return null;
+    final manager = $$DocumentsTableTableManager(
+      $_db,
+      $_db.documents,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(
+      _translationDocumentIdTable($_db),
+    );
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
@@ -1766,6 +1854,29 @@ class $$DocumentsTableFilterComposer
           }) => $$FoldersTableFilterComposer(
             $db: $db,
             $table: $db.folders,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$DocumentsTableFilterComposer get translationDocumentId {
+    final $$DocumentsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.translationDocumentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableFilterComposer(
+            $db: $db,
+            $table: $db.documents,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -1842,6 +1953,29 @@ class $$DocumentsTableOrderingComposer
     );
     return composer;
   }
+
+  $$DocumentsTableOrderingComposer get translationDocumentId {
+    final $$DocumentsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.translationDocumentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableOrderingComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$DocumentsTableAnnotationComposer
@@ -1898,6 +2032,29 @@ class $$DocumentsTableAnnotationComposer
     );
     return composer;
   }
+
+  $$DocumentsTableAnnotationComposer get translationDocumentId {
+    final $$DocumentsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.translationDocumentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$DocumentsTableTableManager
@@ -1913,7 +2070,7 @@ class $$DocumentsTableTableManager
           $$DocumentsTableUpdateCompanionBuilder,
           (Document, $$DocumentsTableReferences),
           Document,
-          PrefetchHooks Function({bool folderId})
+          PrefetchHooks Function({bool folderId, bool translationDocumentId})
         > {
   $$DocumentsTableTableManager(_$AppDatabase db, $DocumentsTable table)
     : super(
@@ -1934,6 +2091,7 @@ class $$DocumentsTableTableManager
                 Value<String> format = const Value.absent(),
                 Value<String?> storageKey = const Value.absent(),
                 Value<String?> content = const Value.absent(),
+                Value<int?> translationDocumentId = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
               }) => DocumentsCompanion(
@@ -1943,6 +2101,7 @@ class $$DocumentsTableTableManager
                 format: format,
                 storageKey: storageKey,
                 content: content,
+                translationDocumentId: translationDocumentId,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
               ),
@@ -1954,6 +2113,7 @@ class $$DocumentsTableTableManager
                 required String format,
                 Value<String?> storageKey = const Value.absent(),
                 Value<String?> content = const Value.absent(),
+                Value<int?> translationDocumentId = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
               }) => DocumentsCompanion.insert(
@@ -1963,6 +2123,7 @@ class $$DocumentsTableTableManager
                 format: format,
                 storageKey: storageKey,
                 content: content,
+                translationDocumentId: translationDocumentId,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
               ),
@@ -1974,45 +2135,57 @@ class $$DocumentsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({folderId = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (folderId) {
-                      state = state.withJoin(
-                        currentTable: table,
-                        currentColumn: table.folderId,
-                        referencedTable: $$DocumentsTableReferences
-                            ._folderIdTable(db),
-                        referencedColumn: $$DocumentsTableReferences
-                            ._folderIdTable(db)
-                            .id,
-                      ) as T;
-                    }
+          prefetchHooksCallback:
+              ({folderId = false, translationDocumentId = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (folderId) {
+                          state = state.withJoin(
+                            currentTable: table,
+                            currentColumn: table.folderId,
+                            referencedTable: $$DocumentsTableReferences
+                                ._folderIdTable(db),
+                            referencedColumn: $$DocumentsTableReferences
+                                ._folderIdTable(db)
+                                .id,
+                          ) as T;
+                        }
+                        if (translationDocumentId) {
+                          state = state.withJoin(
+                            currentTable: table,
+                            currentColumn: table.translationDocumentId,
+                            referencedTable: $$DocumentsTableReferences
+                                ._translationDocumentIdTable(db),
+                            referencedColumn: $$DocumentsTableReferences
+                                ._translationDocumentIdTable(db)
+                                .id,
+                          ) as T;
+                        }
 
-                    return state;
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [];
                   },
-              getPrefetchedDataCallback: (items) async {
-                return [];
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -2029,7 +2202,7 @@ typedef $$DocumentsTableProcessedTableManager =
       $$DocumentsTableUpdateCompanionBuilder,
       (Document, $$DocumentsTableReferences),
       Document,
-      PrefetchHooks Function({bool folderId})
+      PrefetchHooks Function({bool folderId, bool translationDocumentId})
     >;
 typedef $$DictionaryEntriesTableCreateCompanionBuilder =
     DictionaryEntriesCompanion Function({
