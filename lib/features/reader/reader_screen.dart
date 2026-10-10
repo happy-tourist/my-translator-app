@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -25,7 +26,7 @@ class PickedTranslationFile {
 
 typedef ReaderTranslationPicker = Future<PickedTranslationFile?> Function();
 
-/// Cues-first Reader with optional split mode (RS-01…RS-10).
+/// Cues-first Reader with optional split mode (RS-01…RS-12).
 class ReaderScreen extends StatefulWidget {
   const ReaderScreen({
     super.key,
@@ -35,6 +36,7 @@ class ReaderScreen extends StatefulWidget {
     required this.documentRepository,
     this.translationCues,
     this.translationDocumentId,
+    this.initialReadingAnchor,
     this.parseSubtitles,
     this.filePicker,
   });
@@ -45,6 +47,9 @@ class ReaderScreen extends StatefulWidget {
   final DocumentRepository documentRepository;
   final List<rust_parse.CueDto>? translationCues;
   final int? translationDocumentId;
+
+  /// Saved original-pane position from Library open (RS-12 / LD-17).
+  final ReadingAnchor? initialReadingAnchor;
 
   /// Defaults to generated FRB [rust_parse.parseSubtitles].
   final ParseSubtitlesFn? parseSubtitles;
@@ -66,6 +71,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   var _syncing = false;
   var _userInitiatedScroll = false;
   var _loadingTranslation = false;
+  var _didRestoreInitialAnchor = false;
 
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
@@ -89,6 +95,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
     super.initState();
     _translationCues = widget.translationCues;
     _translationDocumentId = widget.translationDocumentId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreInitialReadingAnchor();
+    });
+  }
+
+  @override
+  void dispose() {
+    // RS-12 / D10: best-effort save on pop/dispose (do not block).
+    // Force: skip `_syncing` guard — pop must still persist even mid-sync.
+    unawaited(_persistReadingAnchor(force: true));
+    super.dispose();
   }
 
   void _showError(String message) {
@@ -102,13 +119,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _toggleSplit() {
-    if (_splitEnabled) {
-      setState(() => _splitEnabled = false);
-      return;
-    }
-
-    // RS-10 / D7: remounting the original list would reset scroll — capture
-    // top-visible anchor before enabling split, restore after layout.
+    // RS-10 / RS-11 / D7: remounting the original list resets scroll — capture
+    // top-visible anchor before Show *and* Hide, restore after layout.
+    final enabling = !_splitEnabled;
     final anchor = _topVisible(_originalPositions);
     final restoreIndex = (anchor?.index ?? 0).clamp(
       0,
@@ -117,7 +130,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final restoreAlignment =
         (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
 
-    setState(() => _splitEnabled = true);
+    setState(() => _splitEnabled = enabling);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -128,13 +141,76 @@ class _ReaderScreenState extends State<ReaderScreen> {
           alignment: restoreAlignment,
         );
       }
-      if (_hasTranslationCues) {
+      if (enabling && _hasTranslationCues) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           _syncPanes(fromOriginal: true);
         });
       }
     });
+  }
+
+  void _restoreInitialReadingAnchor({int attempt = 0}) {
+    if (_didRestoreInitialAnchor || !mounted) return;
+
+    final saved = widget.initialReadingAnchor;
+    if (saved == null || widget.originalCues.isEmpty) {
+      _didRestoreInitialAnchor = true;
+      return;
+    }
+    if (!_originalScrollController.isAttached) {
+      if (attempt >= 5) {
+        _didRestoreInitialAnchor = true;
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _restoreInitialReadingAnchor(attempt: attempt + 1);
+      });
+      return;
+    }
+
+    _didRestoreInitialAnchor = true;
+    final index = nearestCueIndex(
+      widget.originalCues,
+      BigInt.from(saved.startMs),
+    );
+    if (index < 0) return;
+    final alignment = (saved.alignment ?? 0.0).clamp(0.0, 1.0);
+    _originalScrollController.jumpTo(index: index, alignment: alignment);
+
+    if (_hasTranslationCues && _splitEnabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _syncPanes(fromOriginal: true);
+      });
+    }
+  }
+
+  Future<void> _persistReadingAnchor({bool force = false}) async {
+    // D10: never write while programmatic sync is in flight (unless pop/dispose).
+    if (!force && _syncing) return;
+    if (widget.originalCues.isEmpty) return;
+
+    final top = _topVisible(_originalPositions);
+    if (top == null) return;
+    final index = top.index;
+    if (index < 0 || index >= widget.originalCues.length) return;
+
+    // Best-effort: fail MUST NOT block UI (D10). Whole body in try (incl. toInt).
+    try {
+      final startMs = widget.originalCues[index].startMs.toInt();
+      final alignment = top.itemLeadingEdge.clamp(0.0, 1.0);
+      await widget.documentRepository.saveReadingAnchor(
+        documentId: widget.originalDocumentId,
+        startMs: startMs,
+        alignment: alignment,
+      );
+    } catch (e, st) {
+      assert(() {
+        debugPrint('saveReadingAnchor failed: $e\n$st');
+        return true;
+      }());
+    }
   }
 
   Future<PickedTranslationFile?> _defaultPick() async {
@@ -296,16 +372,30 @@ class _ReaderScreenState extends State<ReaderScreen> {
     ScrollNotification notification, {
     required bool fromOriginal,
   }) {
-    // Only user drags arm settle-sync; programmatic scrollTo/jumpTo must not
-    // re-enter and fight A↔B (RS-06 guard).
+    // Only pointer drags arm settle-sync / settle-persist. Programmatic
+    // scrollTo/jumpTo also emit scrollDelta without dragDetails — treating
+    // those as user input re-enters A↔B after `_syncing` clears (RS-06).
+    // Wheel/trackpad: no dragDetails → no settle sync; dispose still persists.
     if (notification is ScrollUpdateNotification &&
         notification.dragDetails != null) {
       _userInitiatedScroll = true;
     }
     if (notification is! ScrollEndNotification) return false;
-    if (_syncing || !_splitEnabled || !_userInitiatedScroll) return false;
-    if (_translationCues == null || _translationCues!.isEmpty) return false;
+    if (!_userInitiatedScroll) return false;
+
+    final userScroll = _userInitiatedScroll;
     _userInitiatedScroll = false;
+
+    // RS-12 / D10: persist original anchor on user settle (skip while syncing).
+    if (fromOriginal && userScroll && !_syncing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _persistReadingAnchor();
+      });
+    }
+
+    if (_syncing || !_splitEnabled) return false;
+    if (_translationCues == null || _translationCues!.isEmpty) return false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _syncPanes(fromOriginal: fromOriginal);

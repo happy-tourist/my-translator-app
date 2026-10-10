@@ -267,4 +267,30 @@ void main() {
     final listed = await documents.listInFolder(folder.id);
     expect(listed.map((d) => d.id), [keep.id]);
   });
+
+  test('LD-17: Persist and load reading anchor for original', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+
+    expect(await documents.loadReadingAnchor(original.id), isNull);
+
+    await documents.saveReadingAnchor(
+      documentId: original.id,
+      startMs: 4500,
+      alignment: 0.25,
+    );
+
+    final loaded = await documents.loadReadingAnchor(original.id);
+    expect(loaded, isNotNull);
+    expect(loaded!.startMs, 4500);
+    expect(loaded.alignment, closeTo(0.25, 1e-9));
+
+    final reloaded = await documents.getById(original.id);
+    expect(reloaded!.lastReadStartMs, 4500);
+    expect(reloaded.lastReadAlignment, closeTo(0.25, 1e-9));
+  });
 }

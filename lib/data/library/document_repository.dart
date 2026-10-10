@@ -7,6 +7,17 @@ import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 
+/// Saved original-pane reading position (`library/documents` LD-17).
+class ReadingAnchor {
+  const ReadingAnchor({required this.startMs, this.alignment});
+
+  /// Cue start time in milliseconds (fits i64; compare to [CueDto.startMs] as BigInt).
+  final int startMs;
+
+  /// Optional `itemLeadingEdge` in `0.0…1.0`.
+  final double? alignment;
+}
+
 /// Drift-backed library documents (`library/documents`).
 class DocumentRepository {
   DocumentRepository(this._db, {required this.contentStore});
@@ -189,6 +200,37 @@ class DocumentRepository {
       return null;
     }
     return getById(translationId);
+  }
+
+  /// Persists the original document's reading anchor (LD-17 / D9).
+  ///
+  /// No-op if [documentId] is missing (best-effort; D10 — must not block UI).
+  Future<void> saveReadingAnchor({
+    required int documentId,
+    required int startMs,
+    double? alignment,
+  }) async {
+    final clampedAlignment = alignment?.clamp(0.0, 1.0);
+    await (_db.update(_db.documents)..where((d) => d.id.equals(documentId)))
+        .write(
+          DocumentsCompanion(
+            lastReadStartMs: Value(startMs),
+            lastReadAlignment: Value(clampedAlignment?.toDouble()),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+  }
+
+  /// Loads the saved reading anchor for [documentId], or null (LD-17).
+  Future<ReadingAnchor?> loadReadingAnchor(int documentId) async {
+    final doc = await getById(documentId);
+    if (doc == null) return null;
+    final startMs = doc.lastReadStartMs;
+    if (startMs == null) return null;
+    return ReadingAnchor(
+      startMs: startMs,
+      alignment: doc.lastReadAlignment,
+    );
   }
 
   /// Deletes a document; cascades a linked hidden translation (LD-15).

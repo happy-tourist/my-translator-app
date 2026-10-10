@@ -438,6 +438,29 @@ class $DocumentsTable extends Documents
       'REFERENCES documents (id)',
     ),
   );
+  static const VerificationMeta _lastReadStartMsMeta = const VerificationMeta(
+    'lastReadStartMs',
+  );
+  @override
+  late final GeneratedColumn<int> lastReadStartMs = GeneratedColumn<int>(
+    'last_read_start_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _lastReadAlignmentMeta = const VerificationMeta(
+    'lastReadAlignment',
+  );
+  @override
+  late final GeneratedColumn<double> lastReadAlignment =
+      GeneratedColumn<double>(
+        'last_read_alignment',
+        aliasedName,
+        true,
+        type: DriftSqlType.double,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -471,6 +494,8 @@ class $DocumentsTable extends Documents
     storageKey,
     content,
     translationDocumentId,
+    lastReadStartMs,
+    lastReadAlignment,
     createdAt,
     updatedAt,
   ];
@@ -534,6 +559,24 @@ class $DocumentsTable extends Documents
         ),
       );
     }
+    if (data.containsKey('last_read_start_ms')) {
+      context.handle(
+        _lastReadStartMsMeta,
+        lastReadStartMs.isAcceptableOrUnknown(
+          data['last_read_start_ms']!,
+          _lastReadStartMsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_read_alignment')) {
+      context.handle(
+        _lastReadAlignmentMeta,
+        lastReadAlignment.isAcceptableOrUnknown(
+          data['last_read_alignment']!,
+          _lastReadAlignmentMeta,
+        ),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -583,6 +626,14 @@ class $DocumentsTable extends Documents
         DriftSqlType.int,
         data['${effectivePrefix}translation_document_id'],
       ),
+      lastReadStartMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}last_read_start_ms'],
+      ),
+      lastReadAlignment: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}last_read_alignment'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -616,6 +667,12 @@ class Document extends DataClass implements Insertable<Document> {
 
   /// Linked hidden translation document (`reader/split`); set on the original.
   final int? translationDocumentId;
+
+  /// Last reading position on the original (`library/documents` LD-17): cue start ms.
+  final int? lastReadStartMs;
+
+  /// Viewport alignment of the anchor row (`itemLeadingEdge`, 0.0…1.0).
+  final double? lastReadAlignment;
   final DateTime createdAt;
   final DateTime updatedAt;
   const Document({
@@ -626,6 +683,8 @@ class Document extends DataClass implements Insertable<Document> {
     this.storageKey,
     this.content,
     this.translationDocumentId,
+    this.lastReadStartMs,
+    this.lastReadAlignment,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -644,6 +703,12 @@ class Document extends DataClass implements Insertable<Document> {
     }
     if (!nullToAbsent || translationDocumentId != null) {
       map['translation_document_id'] = Variable<int>(translationDocumentId);
+    }
+    if (!nullToAbsent || lastReadStartMs != null) {
+      map['last_read_start_ms'] = Variable<int>(lastReadStartMs);
+    }
+    if (!nullToAbsent || lastReadAlignment != null) {
+      map['last_read_alignment'] = Variable<double>(lastReadAlignment);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
@@ -665,6 +730,12 @@ class Document extends DataClass implements Insertable<Document> {
       translationDocumentId: translationDocumentId == null && nullToAbsent
           ? const Value.absent()
           : Value(translationDocumentId),
+      lastReadStartMs: lastReadStartMs == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastReadStartMs),
+      lastReadAlignment: lastReadAlignment == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastReadAlignment),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -685,6 +756,10 @@ class Document extends DataClass implements Insertable<Document> {
       translationDocumentId: serializer.fromJson<int?>(
         json['translationDocumentId'],
       ),
+      lastReadStartMs: serializer.fromJson<int?>(json['lastReadStartMs']),
+      lastReadAlignment: serializer.fromJson<double?>(
+        json['lastReadAlignment'],
+      ),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -700,6 +775,8 @@ class Document extends DataClass implements Insertable<Document> {
       'storageKey': serializer.toJson<String?>(storageKey),
       'content': serializer.toJson<String?>(content),
       'translationDocumentId': serializer.toJson<int?>(translationDocumentId),
+      'lastReadStartMs': serializer.toJson<int?>(lastReadStartMs),
+      'lastReadAlignment': serializer.toJson<double?>(lastReadAlignment),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -713,6 +790,8 @@ class Document extends DataClass implements Insertable<Document> {
     Value<String?> storageKey = const Value.absent(),
     Value<String?> content = const Value.absent(),
     Value<int?> translationDocumentId = const Value.absent(),
+    Value<int?> lastReadStartMs = const Value.absent(),
+    Value<double?> lastReadAlignment = const Value.absent(),
     DateTime? createdAt,
     DateTime? updatedAt,
   }) => Document(
@@ -725,6 +804,12 @@ class Document extends DataClass implements Insertable<Document> {
     translationDocumentId: translationDocumentId.present
         ? translationDocumentId.value
         : this.translationDocumentId,
+    lastReadStartMs: lastReadStartMs.present
+        ? lastReadStartMs.value
+        : this.lastReadStartMs,
+    lastReadAlignment: lastReadAlignment.present
+        ? lastReadAlignment.value
+        : this.lastReadAlignment,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -741,6 +826,12 @@ class Document extends DataClass implements Insertable<Document> {
       translationDocumentId: data.translationDocumentId.present
           ? data.translationDocumentId.value
           : this.translationDocumentId,
+      lastReadStartMs: data.lastReadStartMs.present
+          ? data.lastReadStartMs.value
+          : this.lastReadStartMs,
+      lastReadAlignment: data.lastReadAlignment.present
+          ? data.lastReadAlignment.value
+          : this.lastReadAlignment,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -756,6 +847,8 @@ class Document extends DataClass implements Insertable<Document> {
           ..write('storageKey: $storageKey, ')
           ..write('content: $content, ')
           ..write('translationDocumentId: $translationDocumentId, ')
+          ..write('lastReadStartMs: $lastReadStartMs, ')
+          ..write('lastReadAlignment: $lastReadAlignment, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -771,6 +864,8 @@ class Document extends DataClass implements Insertable<Document> {
     storageKey,
     content,
     translationDocumentId,
+    lastReadStartMs,
+    lastReadAlignment,
     createdAt,
     updatedAt,
   );
@@ -785,6 +880,8 @@ class Document extends DataClass implements Insertable<Document> {
           other.storageKey == this.storageKey &&
           other.content == this.content &&
           other.translationDocumentId == this.translationDocumentId &&
+          other.lastReadStartMs == this.lastReadStartMs &&
+          other.lastReadAlignment == this.lastReadAlignment &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -797,6 +894,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
   final Value<String?> storageKey;
   final Value<String?> content;
   final Value<int?> translationDocumentId;
+  final Value<int?> lastReadStartMs;
+  final Value<double?> lastReadAlignment;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   const DocumentsCompanion({
@@ -807,6 +906,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.storageKey = const Value.absent(),
     this.content = const Value.absent(),
     this.translationDocumentId = const Value.absent(),
+    this.lastReadStartMs = const Value.absent(),
+    this.lastReadAlignment = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
   });
@@ -818,6 +919,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.storageKey = const Value.absent(),
     this.content = const Value.absent(),
     this.translationDocumentId = const Value.absent(),
+    this.lastReadStartMs = const Value.absent(),
+    this.lastReadAlignment = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
   }) : folderId = Value(folderId),
@@ -831,6 +934,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Expression<String>? storageKey,
     Expression<String>? content,
     Expression<int>? translationDocumentId,
+    Expression<int>? lastReadStartMs,
+    Expression<double>? lastReadAlignment,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
   }) {
@@ -843,6 +948,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
       if (content != null) 'content': content,
       if (translationDocumentId != null)
         'translation_document_id': translationDocumentId,
+      if (lastReadStartMs != null) 'last_read_start_ms': lastReadStartMs,
+      if (lastReadAlignment != null) 'last_read_alignment': lastReadAlignment,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
     });
@@ -856,6 +963,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Value<String?>? storageKey,
     Value<String?>? content,
     Value<int?>? translationDocumentId,
+    Value<int?>? lastReadStartMs,
+    Value<double?>? lastReadAlignment,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
   }) {
@@ -868,6 +977,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
       content: content ?? this.content,
       translationDocumentId:
           translationDocumentId ?? this.translationDocumentId,
+      lastReadStartMs: lastReadStartMs ?? this.lastReadStartMs,
+      lastReadAlignment: lastReadAlignment ?? this.lastReadAlignment,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -899,6 +1010,12 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
         translationDocumentId.value,
       );
     }
+    if (lastReadStartMs.present) {
+      map['last_read_start_ms'] = Variable<int>(lastReadStartMs.value);
+    }
+    if (lastReadAlignment.present) {
+      map['last_read_alignment'] = Variable<double>(lastReadAlignment.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -918,6 +1035,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
           ..write('storageKey: $storageKey, ')
           ..write('content: $content, ')
           ..write('translationDocumentId: $translationDocumentId, ')
+          ..write('lastReadStartMs: $lastReadStartMs, ')
+          ..write('lastReadAlignment: $lastReadAlignment, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -1739,6 +1858,8 @@ typedef $$DocumentsTableCreateCompanionBuilder = DocumentsCompanion Function({
   Value<String?> storageKey,
   Value<String?> content,
   Value<int?> translationDocumentId,
+  Value<int?> lastReadStartMs,
+  Value<double?> lastReadAlignment,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
 });
@@ -1750,6 +1871,8 @@ typedef $$DocumentsTableUpdateCompanionBuilder = DocumentsCompanion Function({
   Value<String?> storageKey,
   Value<String?> content,
   Value<int?> translationDocumentId,
+  Value<int?> lastReadStartMs,
+  Value<double?> lastReadAlignment,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
 });
@@ -1827,6 +1950,16 @@ class $$DocumentsTableFilterComposer
 
   ColumnFilters<String> get content => $composableBuilder(
     column: $table.content,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get lastReadStartMs => $composableBuilder(
+    column: $table.lastReadStartMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get lastReadAlignment => $composableBuilder(
+    column: $table.lastReadAlignment,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1921,6 +2054,16 @@ class $$DocumentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get lastReadStartMs => $composableBuilder(
+    column: $table.lastReadStartMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get lastReadAlignment => $composableBuilder(
+    column: $table.lastReadAlignment,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -2003,6 +2146,16 @@ class $$DocumentsTableAnnotationComposer
 
   GeneratedColumn<String> get content =>
       $composableBuilder(column: $table.content, builder: (column) => column);
+
+  GeneratedColumn<int> get lastReadStartMs => $composableBuilder(
+    column: $table.lastReadStartMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get lastReadAlignment => $composableBuilder(
+    column: $table.lastReadAlignment,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -2092,6 +2245,8 @@ class $$DocumentsTableTableManager
                 Value<String?> storageKey = const Value.absent(),
                 Value<String?> content = const Value.absent(),
                 Value<int?> translationDocumentId = const Value.absent(),
+                Value<int?> lastReadStartMs = const Value.absent(),
+                Value<double?> lastReadAlignment = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
               }) => DocumentsCompanion(
@@ -2102,6 +2257,8 @@ class $$DocumentsTableTableManager
                 storageKey: storageKey,
                 content: content,
                 translationDocumentId: translationDocumentId,
+                lastReadStartMs: lastReadStartMs,
+                lastReadAlignment: lastReadAlignment,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
               ),
@@ -2114,6 +2271,8 @@ class $$DocumentsTableTableManager
                 Value<String?> storageKey = const Value.absent(),
                 Value<String?> content = const Value.absent(),
                 Value<int?> translationDocumentId = const Value.absent(),
+                Value<int?> lastReadStartMs = const Value.absent(),
+                Value<double?> lastReadAlignment = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
               }) => DocumentsCompanion.insert(
@@ -2124,6 +2283,8 @@ class $$DocumentsTableTableManager
                 storageKey: storageKey,
                 content: content,
                 translationDocumentId: translationDocumentId,
+                lastReadStartMs: lastReadStartMs,
+                lastReadAlignment: lastReadAlignment,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
               ),

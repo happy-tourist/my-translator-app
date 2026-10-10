@@ -50,6 +50,7 @@ void main() {
   late int pumpOriginalDocumentId;
   List<CueDto>? pumpTranslationCues;
   int? pumpTranslationDocumentId;
+  ReadingAnchor? pumpInitialReadingAnchor;
   ParseSubtitlesFn? pumpParse;
   ReaderTranslationPicker? pumpPicker;
 
@@ -62,6 +63,7 @@ void main() {
     pumpOriginalDocumentId = 1;
     pumpTranslationCues = null;
     pumpTranslationDocumentId = null;
+    pumpInitialReadingAnchor = null;
     pumpParse = null;
     pumpPicker = null;
   });
@@ -90,6 +92,7 @@ void main() {
           documentRepository: documents,
           translationCues: pumpTranslationCues,
           translationDocumentId: pumpTranslationDocumentId,
+          initialReadingAnchor: pumpInitialReadingAnchor,
           parseSubtitles: pumpParse,
           filePicker: pumpPicker,
         ),
@@ -548,6 +551,85 @@ void main() {
         int.parse(afterVisible.first.replaceFirst('Cue line ', ''));
     expect(afterIndex, greaterThan(0));
     expect((afterIndex - anchorIndex).abs(), lessThanOrEqualTo(2));
+  });
+
+  testWidgets('RS-11: Hide split preserves original scroll', (tester) async {
+    pumpCues = _sampleCues(count: 40);
+    await pumpReader(tester);
+
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('readerOriginalCueList')), findsOneWidget);
+
+    await tester.drag(
+      find.byKey(const Key('readerOriginalCueList')),
+      const Offset(0, -2500),
+    );
+    await tester.pumpAndSettle();
+
+    final beforeVisible = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerOriginalCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Cue line '))
+        .toList();
+    expect(beforeVisible, isNotEmpty);
+    final anchorLine = beforeVisible.first;
+    final anchorIndex = int.parse(anchorLine.replaceFirst('Cue line ', ''));
+    expect(anchorIndex, greaterThan(0));
+
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerCueList')), findsOneWidget);
+    expect(find.byKey(Key('readerCue_$anchorIndex')), findsOneWidget);
+
+    final afterVisible = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Cue line '))
+        .toList();
+    expect(afterVisible, isNotEmpty);
+    final afterIndex =
+        int.parse(afterVisible.first.replaceFirst('Cue line ', ''));
+    expect(afterIndex, greaterThan(0));
+    expect((afterIndex - anchorIndex).abs(), lessThanOrEqualTo(2));
+  });
+
+  testWidgets('RS-12: Reopen resumes at saved original anchor', (tester) async {
+    pumpCues = _sampleCues(count: 40, startStepMs: 1000);
+    // Cue 12 starts at 12000 ms — not the beginning of the list.
+    pumpInitialReadingAnchor = const ReadingAnchor(
+      startMs: 12000,
+      alignment: 0.0,
+    );
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerCueList')), findsOneWidget);
+    expect(find.byKey(const Key('readerCue_12')), findsOneWidget);
+    expect(find.text('Cue line 12'), findsOneWidget);
+
+    final visible = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Cue line '))
+        .toList();
+    expect(visible, isNotEmpty);
+    final topIndex = int.parse(visible.first.replaceFirst('Cue line ', ''));
+    expect(topIndex, greaterThan(0));
+    expect((topIndex - 12).abs(), lessThanOrEqualTo(2));
   });
 
   testWidgets(

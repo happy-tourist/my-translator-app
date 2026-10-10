@@ -23,6 +23,10 @@ class Documents extends Table {
   /// Linked hidden translation document (`reader/split`); set on the original.
   IntColumn get translationDocumentId =>
       integer().nullable().references(Documents, #id)();
+  /// Last reading position on the original (`library/documents` LD-17): cue start ms.
+  IntColumn get lastReadStartMs => integer().nullable()();
+  /// Viewport alignment of the anchor row (`itemLeadingEdge`, 0.0…1.0).
+  RealColumn get lastReadAlignment => real().nullable()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
 }

@@ -272,6 +272,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
         }
       }
 
+      // LD-17 / RS-12: best-effort reading anchor; fail must not block open.
+      ReadingAnchor? initialReadingAnchor;
+      try {
+        initialReadingAnchor =
+            await widget.documentRepository.loadReadingAnchor(doc.id);
+      } catch (e, st) {
+        assert(() {
+          debugPrint('loadReadingAnchor failed (ignored): $e\n$st');
+          return true;
+        }());
+      }
+
       if (!mounted) return;
       setState(() => _opening = false);
       await Navigator.of(context).push(
@@ -283,6 +295,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             documentRepository: widget.documentRepository,
             translationCues: translationCues,
             translationDocumentId: translationDocumentId,
+            initialReadingAnchor: initialReadingAnchor,
             parseSubtitles: widget.parseSubtitles,
           ),
         ),

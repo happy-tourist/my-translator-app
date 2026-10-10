@@ -13,7 +13,7 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.connect() => AppDatabase(_openConnection());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -23,6 +23,10 @@ class AppDatabase extends _$AppDatabase {
           documents,
           documents.translationDocumentId,
         );
+      }
+      if (from < 3) {
+        await migrator.addColumn(documents, documents.lastReadStartMs);
+        await migrator.addColumn(documents, documents.lastReadAlignment);
       }
     },
   );

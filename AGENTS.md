@@ -58,7 +58,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD); cues-first Reader with split toggle / load-delete translation / time sync; Drift schema v2 (`translationDocumentId`) + repositories (`attachTranslation` / `loadBytes` / content store)
+- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD); cues-first Reader with split toggle / load-delete translation / time sync + reading-anchor resume; Drift schema v3 (`translationDocumentId`, `lastReadStartMs` / `lastReadAlignment`) + repositories (`attachTranslation` / `saveReadingAnchor` / `loadBytes` / content store)
 - Rust: `parse/` + FRB `parse_subtitles` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold)
 
