@@ -134,4 +134,35 @@ void main() {
     expect(list.single.surfaceKey, 'running');
     expect(list.single.translation, 'бежать');
   });
+
+  testWidgets('DE-18: Vocab multi-word input → casefold without WordNet', (
+    tester,
+  ) async {
+    var lemmaKeysCalls = 0;
+    await pumpVocab(
+      tester,
+      lemmaKeys: (surfaces) async {
+        lemmaKeysCalls++;
+        return _morphLemmaKeys(surfaces);
+      },
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('vocabLemmaField')),
+      'Look Up',
+    );
+    await tester.enterText(
+      find.byKey(const Key('vocabTranslationField')),
+      'искать',
+    );
+    await tester.tap(find.byKey(const Key('vocabAddButton')));
+    await tester.pumpAndSettle();
+
+    expect(lemmaKeysCalls, 0);
+    final list = await dictionary.list();
+    expect(list, hasLength(1));
+    expect(list.single.lemma, 'look up');
+    expect(list.single.surfaceKey, 'look up');
+    expect(list.single.translation, 'искать');
+  });
 }

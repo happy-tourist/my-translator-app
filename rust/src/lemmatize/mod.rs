@@ -25,7 +25,8 @@ pub fn lemma_key_for_surface(surface: &str) -> String {
     }
     let lower = casefold(trimmed);
     if lower.chars().any(|c| c.is_whitespace()) {
-        return lower;
+        // Phrase identity = casefold(join with single spaces), not raw multi-space.
+        return lower.split_whitespace().collect::<Vec<_>>().join(" ");
     }
     let lem = lemmatizer();
     for pos in [Pos::Noun, Pos::Verb, Pos::Adj] {
@@ -42,6 +43,68 @@ pub fn lemma_keys_for_surfaces(surfaces: &[String]) -> Vec<String> {
     surfaces
         .iter()
         .map(|s| lemma_key_for_surface(s))
+        .collect()
+}
+
+/// Design D2: morph singles **and** phrase windows → per-token `is_in_vocab`.
+///
+/// Each cue is `(surface, lemma_key)` pairs. Phrase keys (whitespace) match
+/// consecutive `casefold(join(surfaces, " "))` windows; singles match
+/// casefolded `lemma_key`. Overlaps OR to true.
+pub fn mark_vocab_flags(
+    cues: &[Vec<(String, String)>],
+    vocab_lemmas: impl IntoIterator<Item = String>,
+) -> Vec<Vec<bool>> {
+    use std::collections::HashSet;
+
+    let mut singles: HashSet<String> = HashSet::new();
+    let mut phrases: Vec<(String, usize)> = Vec::new();
+    for raw in vocab_lemmas {
+        let key = casefold(raw.trim());
+        if key.is_empty() {
+            continue;
+        }
+        if key.chars().any(|c| c.is_whitespace()) {
+            let parts: Vec<&str> = key.split_whitespace().collect();
+            let word_count = parts.len();
+            if word_count >= 2 {
+                phrases.push((parts.join(" "), word_count));
+            }
+        } else {
+            singles.insert(key);
+        }
+    }
+
+    cues.iter()
+        .map(|tokens| {
+            let n = tokens.len();
+            let mut flags: Vec<bool> = tokens
+                .iter()
+                .map(|(_, lemma_key)| {
+                    let key = casefold(lemma_key.trim());
+                    !key.is_empty() && singles.contains(&key)
+                })
+                .collect();
+            for (phrase_key, word_count) in &phrases {
+                if *word_count > n {
+                    continue;
+                }
+                let last_start = n - word_count;
+                for start in 0..=last_start {
+                    let joined: String = tokens[start..start + word_count]
+                        .iter()
+                        .map(|(surface, _)| casefold(surface.trim()))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if joined == *phrase_key {
+                        for f in &mut flags[start..start + word_count] {
+                            *f = true;
+                        }
+                    }
+                }
+            }
+            flags
+        })
         .collect()
 }
 
@@ -67,12 +130,13 @@ mod tests {
         assert_eq!(lemma_key_for_surface("XyzZy"), "xyzzy");
     }
 
-    /// Whitespace phrase → casefold only (no WordNet).
+    /// Whitespace phrase → casefold + single-space join (no WordNet).
     #[test]
     fn whitespace_phrase_casefold_no_wordnet() {
         assert_eq!(lemma_key_for_surface("look up"), "look up");
         assert_eq!(lemma_key_for_surface("  Look Up  "), "look up");
-        // Would be WordNet'd if single-token; phrase path must not collapse.
+        assert_eq!(lemma_key_for_surface("look  up"), "look up");
+        // Would be WordNet'd if single-token; phrase path must not morph-join.
         assert_eq!(lemma_key_for_surface("dogs running"), "dogs running");
     }
 

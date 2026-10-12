@@ -76,12 +76,20 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
     setState(() => _formError = null);
     try {
       final input = _lemmaController.text;
-      final keys = await _lemmaKeysForSurfaces([input]);
+      final surfaceKey = DictionaryRepository.normalizeSurface(input);
+      // D5.1: multi-word typed input → casefold identity (no WordNet).
+      final String lemma;
+      if (surfaceKey.contains(RegExp(r'\s'))) {
+        lemma = surfaceKey;
+      } else {
+        final keys = await _lemmaKeysForSurfaces([input]);
+        if (!mounted) return;
+        lemma = keys.isEmpty ? '' : keys.first;
+      }
       if (!mounted) return;
-      final morph = keys.isEmpty ? '' : keys.first;
       await widget.dictionaryRepository.add(
-        lemma: morph,
-        surfaceKey: DictionaryRepository.normalizeSurface(input),
+        lemma: lemma,
+        surfaceKey: surfaceKey,
         translation: _translationController.text,
         context: _contextController.text,
       );

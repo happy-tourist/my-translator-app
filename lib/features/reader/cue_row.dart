@@ -20,6 +20,7 @@ class CueRow extends StatelessWidget {
     this.tokens,
     this.selectionStart,
     this.selectionEnd,
+    this.flashTokenIndex,
     this.onTokenTap,
   });
 
@@ -35,9 +36,11 @@ class CueRow extends StatelessWidget {
   final List<TokenDto>? tokens;
 
   /// Inclusive selection range within [tokens] when this cue is active.
-  /// Single-token Add: [selectionStart] == [selectionEnd].
   final int? selectionStart;
   final int? selectionEnd;
+
+  /// Brief gap-reset flash target (D5).
+  final int? flashTokenIndex;
 
   final ValueChanged<int>? onTokenTap;
 
@@ -73,6 +76,7 @@ class CueRow extends StatelessWidget {
               textKey: Key('${keyPrefix}Text_${cue.index}'),
               selectionStart: selectionStart,
               selectionEnd: selectionEnd,
+              flashTokenIndex: flashTokenIndex,
               onTokenTap: onTokenTap!,
             )
           else
@@ -96,6 +100,7 @@ class _SelectableCueText extends StatelessWidget {
     required this.textKey,
     required this.selectionStart,
     required this.selectionEnd,
+    required this.flashTokenIndex,
     required this.onTokenTap,
   });
 
@@ -106,6 +111,7 @@ class _SelectableCueText extends StatelessWidget {
   final Key textKey;
   final int? selectionStart;
   final int? selectionEnd;
+  final int? flashTokenIndex;
   final ValueChanged<int> onTokenTap;
 
   @override
@@ -119,6 +125,11 @@ class _SelectableCueText extends StatelessWidget {
     final selectedStyle = (bodyStyle ?? const TextStyle()).copyWith(
       backgroundColor: scheme.primaryContainer,
       color: scheme.onPrimaryContainer,
+    );
+    final flashStyle = (bodyStyle ?? const TextStyle()).copyWith(
+      backgroundColor: scheme.tertiaryContainer,
+      color: scheme.onTertiaryContainer,
+      fontWeight: FontWeight.w700,
     );
     final highlightStyle = (bodyStyle ?? const TextStyle()).copyWith(
       backgroundColor: readerColors.lemmaHighlight,
@@ -148,10 +159,13 @@ class _SelectableCueText extends StatelessWidget {
           selectionEnd != null &&
           idx >= selectionStart! &&
           idx <= selectionEnd!;
-      // Selection chrome may coexist with vocab highlight; selection wins.
-      final style = inSelection
-          ? selectedStyle
-          : (token.isInVocab ? highlightStyle : bodyStyle);
+      final flashing = flashTokenIndex == idx;
+      // Flash > selection > vocab highlight > body.
+      final style = flashing
+          ? flashStyle
+          : (inSelection
+              ? selectedStyle
+              : (token.isInVocab ? highlightStyle : bodyStyle));
       // WidgetSpan (not TextSpan+recognizer): Keys for D9 finders need a Widget.
       spans.add(
         WidgetSpan(

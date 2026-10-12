@@ -80,6 +80,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   static const double _dividerHandleHeight = 16;
   static const double _minRatio = 0.2;
   static const double _maxRatio = 0.8;
+  static const Duration _gapFlashDuration = Duration(milliseconds: 300);
 
   var _splitEnabled = false;
   var _dividerRatio = 0.5;
@@ -95,9 +96,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   List<rust_tokenize.CueTokensDto>? _cueTokensByIndex;
   var _tokenizeReady = false;
 
-  /// Single-token Add selection (D5). Null = empty.
+  /// Contiguous Add selection: active cue + inclusive token range (D5).
   int? _activeCueIndex;
-  int? _selectedTokenIndex;
+  int? _selectionStart;
+  int? _selectionEnd;
+  int? _flashTokenIndex;
+  Timer? _flashTimer;
 
   final _originalScrollController = ItemScrollController();
   final _translationScrollController = ItemScrollController();
@@ -123,7 +127,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool get _hasLinkedTranslation => _translationDocumentId != null;
 
   bool get _hasSelection =>
-      _activeCueIndex != null && _selectedTokenIndex != null;
+      _activeCueIndex != null &&
+      _selectionStart != null &&
+      _selectionEnd != null;
 
   @override
   void initState() {
@@ -138,6 +144,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   void dispose() {
+    _flashTimer?.cancel();
     // RS-12 / D10: best-effort save on pop/dispose (do not block).
     // Force: skip `_syncing` guard — pop must still persist even mid-sync.
     unawaited(_persistReadingAnchor(force: true));
@@ -275,9 +282,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _clearSelection({bool updateState = true}) {
+    _cancelFlash();
     _activeCueIndex = null;
-    _selectedTokenIndex = null;
+    _selectionStart = null;
+    _selectionEnd = null;
     if (updateState && mounted) setState(() {});
+  }
+
+  void _cancelFlash() {
+    _flashTimer?.cancel();
+    _flashTimer = null;
+    _flashTokenIndex = null;
+  }
+
+  /// Starts gap-reset flash; call **after** setState (no Timer side effects inside).
+  void _armFlash(int tokenIndex) {
+    _flashTimer?.cancel();
+    _flashTokenIndex = tokenIndex;
+    _flashTimer = Timer(_gapFlashDuration, () {
+      if (!mounted) return;
+      setState(() => _flashTokenIndex = null);
+    });
   }
 
   void _onOriginalTokenTap(int cueIndex, int tokenIndex) {
@@ -287,33 +312,104 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (tokenIndex < 0 || tokenIndex >= tokens.length) return;
 
     final token = tokens[tokenIndex];
-    // in_vocab → clear Add selection → edit sheet (no CTA).
+    // in_vocab → clear Add selection → edit sheet (no CTA); D8 resolve.
     if (token.isInVocab) {
       _clearSelection();
-      unawaited(_openEditVocabSheet(cueIndex: cueIndex, token: token));
+      unawaited(
+        _openEditVocabSheet(cueIndex: cueIndex, tokenIndex: tokenIndex),
+      );
       return;
     }
 
-    // Retap same non-vocab single → no-op.
-    if (_activeCueIndex == cueIndex && _selectedTokenIndex == tokenIndex) {
-      return;
-    }
-
-    // Empty / other non-vocab → select that single token + CTA.
+    var shouldFlash = false;
     setState(() {
+      // Other cue → clear previous, start new anchor (no gap-flash).
+      if (_activeCueIndex != null && _activeCueIndex != cueIndex) {
+        _cancelFlash();
+        _activeCueIndex = cueIndex;
+        _selectionStart = tokenIndex;
+        _selectionEnd = tokenIndex;
+        return;
+      }
+
       _activeCueIndex = cueIndex;
-      _selectedTokenIndex = tokenIndex;
+      final start = _selectionStart;
+      final end = _selectionEnd;
+
+      // Empty → select [T,T].
+      if (start == null || end == null) {
+        _cancelFlash();
+        _selectionStart = tokenIndex;
+        _selectionEnd = tokenIndex;
+        return;
+      }
+
+      final t = tokenIndex;
+      // Expand adjacent.
+      if (t == start - 1 || t == end + 1) {
+        _cancelFlash();
+        _selectionStart = t < start ? t : start;
+        _selectionEnd = t > end ? t : end;
+        return;
+      }
+
+      // Inside multi-word range → shrink to [T,T].
+      if (t >= start && t <= end && (end - start) >= 1) {
+        _cancelFlash();
+        _selectionStart = t;
+        _selectionEnd = t;
+        return;
+      }
+
+      // Single selected word tapped again → no-op.
+      if (t == start && t == end) {
+        return;
+      }
+
+      // Gap → reset to [T,T] + flash (timer armed after setState).
+      _selectionStart = t;
+      _selectionEnd = t;
+      _flashTokenIndex = t;
+      shouldFlash = true;
     });
+    if (shouldFlash) _armFlash(tokenIndex);
   }
 
-  rust_tokenize.TokenDto? _selectedToken() {
+  /// Display surface for Add sheet: single token surface, or casefold(join).
+  String? _selectedDisplaySurface() {
     if (!_hasSelection || _cueTokensByIndex == null) return null;
     final cueIndex = _activeCueIndex!;
-    final tokenIndex = _selectedTokenIndex!;
-    if (cueIndex < 0 || cueIndex >= _cueTokensByIndex!.length) return null;
     final tokens = _cueTokensByIndex![cueIndex].tokens;
-    if (tokenIndex < 0 || tokenIndex >= tokens.length) return null;
-    return tokens[tokenIndex];
+    final start = _selectionStart!;
+    final end = _selectionEnd!;
+    if (start > end || start < 0 || end >= tokens.length) return null;
+    if (start == end) return tokens[start].surface;
+    return DictionaryRepository.normalizeSurface(
+      tokens.sublist(start, end + 1).map((t) => t.surface).join(' '),
+    );
+  }
+
+  /// Persist keys for Add: single → morph lemma + surfaceKey; phrase → join.
+  ({String lemma, String surfaceKey, String displaySurface})?
+      _selectedPersistKeys() {
+    if (!_hasSelection || _cueTokensByIndex == null) return null;
+    final cueIndex = _activeCueIndex!;
+    final tokens = _cueTokensByIndex![cueIndex].tokens;
+    final start = _selectionStart!;
+    final end = _selectionEnd!;
+    if (start > end || start < 0 || end >= tokens.length) return null;
+    if (start == end) {
+      final t = tokens[start];
+      return (
+        lemma: t.lemmaKey,
+        surfaceKey: DictionaryRepository.normalizeSurface(t.surface),
+        displaySurface: t.surface,
+      );
+    }
+    final joined = DictionaryRepository.normalizeSurface(
+      tokens.sublist(start, end + 1).map((t) => t.surface).join(' '),
+    );
+    return (lemma: joined, surfaceKey: joined, displaySurface: joined);
   }
 
   String? _activeCueText() {
@@ -323,20 +419,70 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return widget.originalCues[cueIndex].textLines.join('\n');
   }
 
+  /// D8: longest phrase span covering [tokenIndex] > shorter > single morph.
+  Future<String?> _resolveEditLemmaKey({
+    required int cueIndex,
+    required int tokenIndex,
+  }) async {
+    final cache = _cueTokensByIndex;
+    if (cache == null || cueIndex < 0 || cueIndex >= cache.length) {
+      return null;
+    }
+    final tokens = cache[cueIndex].tokens;
+    if (tokenIndex < 0 || tokenIndex >= tokens.length) return null;
+
+    final entries = await widget.dictionaryRepository.list();
+    // Match on collapsed join; return Drift lemma for lookup (may differ only
+    // by irregular whitespace on legacy rows).
+    final phrases = <({String matchKey, String driftLemma, int wordCount})>[];
+    for (final e in entries) {
+      final matchKey = DictionaryRepository.normalizeSurface(e.lemma);
+      if (matchKey.isEmpty) continue;
+      if (matchKey.contains(RegExp(r'\s'))) {
+        final wordCount = matchKey.split(RegExp(r'\s+')).length;
+        if (wordCount >= 2) {
+          phrases.add((
+            matchKey: matchKey,
+            driftLemma: e.lemma,
+            wordCount: wordCount,
+          ));
+        }
+      }
+    }
+    phrases.sort((a, b) => b.wordCount.compareTo(a.wordCount));
+
+    final n = tokens.length;
+    for (final phrase in phrases) {
+      final w = phrase.wordCount;
+      if (w > n) continue;
+      for (var start = 0; start <= n - w; start++) {
+        final end = start + w - 1;
+        if (tokenIndex < start || tokenIndex > end) continue;
+        final joined = tokens
+            .sublist(start, end + 1)
+            .map((t) => DictionaryRepository.normalizeSurface(t.surface))
+            .join(' ');
+        if (joined == phrase.matchKey) return phrase.driftLemma;
+      }
+    }
+    return tokens[tokenIndex].lemmaKey;
+  }
+
   Future<void> _openAddVocabSheet() async {
-    final token = _selectedToken();
+    final keys = _selectedPersistKeys();
     final cueText = _activeCueText();
-    if (token == null || cueText == null) return;
-    final surface = token.surface;
-    if (surface.isEmpty) return;
+    if (keys == null || cueText == null || keys.displaySurface.isEmpty) {
+      return;
+    }
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (sheetContext) {
         return _AddVocabSheet(
-          surface: surface,
-          lemmaKey: token.lemmaKey,
+          surface: keys.displaySurface,
+          lemmaKey: keys.lemma,
+          surfaceKey: keys.surfaceKey,
           initialContext: cueText,
           dictionaryRepository: widget.dictionaryRepository,
         );
@@ -352,29 +498,36 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _openEditVocabSheet({
     required int cueIndex,
-    required rust_tokenize.TokenDto token,
+    required int tokenIndex,
   }) async {
-    final entry = await widget.dictionaryRepository.lookup(token.lemmaKey);
+    final cache = _cueTokensByIndex;
+    if (cache == null || cueIndex < 0 || cueIndex >= cache.length) return;
+    final tokens = cache[cueIndex].tokens;
+    if (tokenIndex < 0 || tokenIndex >= tokens.length) return;
+
+    final lemmaKey = await _resolveEditLemmaKey(
+      cueIndex: cueIndex,
+      tokenIndex: tokenIndex,
+    );
+    if (!mounted || lemmaKey == null) return;
+
+    final entry = await widget.dictionaryRepository.lookup(lemmaKey);
     if (!mounted) return;
     if (entry == null) {
-      // Stale flag / race — fall back to Add selection on the tapped cue.
+      // Stale flag / race — fall back to Add selection on the tapped token.
       setState(() {
-        final cache = _cueTokensByIndex;
-        if (cache == null ||
-            cueIndex < 0 ||
-            cueIndex >= cache.length) {
-          return;
-        }
-        final tokens = cache[cueIndex].tokens;
-        if (token.tokenIndex < 0 ||
-            token.tokenIndex >= tokens.length) {
-          return;
-        }
+        _cancelFlash();
         _activeCueIndex = cueIndex;
-        _selectedTokenIndex = token.tokenIndex;
+        _selectionStart = tokenIndex;
+        _selectionEnd = tokenIndex;
       });
       return;
     }
+
+    // Display surface: phrase key as joined words, else token surface.
+    final displaySurface = entry.lemma.contains(RegExp(r'\s'))
+        ? entry.lemma
+        : tokens[tokenIndex].surface;
 
     final changed = await showModalBottomSheet<bool>(
       context: context,
@@ -382,7 +535,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       builder: (sheetContext) {
         return _EditVocabSheet(
           entry: entry,
-          surface: token.surface,
+          surface: displaySurface,
           dictionaryRepository: widget.dictionaryRepository,
         );
       },
@@ -749,8 +902,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _buildAddVocabCta() {
-    final token = _selectedToken();
-    final surface = token?.surface;
+    final surface = _selectedDisplaySurface();
     return Material(
       elevation: 8,
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
@@ -973,8 +1125,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
             keyPrefix: keyPrefix,
             cueListIndex: fromOriginal ? index : null,
             tokens: tokens,
-            selectionStart: isActive ? _selectedTokenIndex : null,
-            selectionEnd: isActive ? _selectedTokenIndex : null,
+            selectionStart: isActive ? _selectionStart : null,
+            selectionEnd: isActive ? _selectionEnd : null,
+            flashTokenIndex: isActive ? _flashTokenIndex : null,
             onTokenTap: tokensReady && tokens != null && tokens.isNotEmpty
                 ? (tokenIndex) => _onOriginalTokenTap(index, tokenIndex)
                 : null,
@@ -985,17 +1138,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 }
 
-/// Bottom sheet to add Reader single-token selection (D5 / RT-05…RT-07).
+/// Bottom sheet to add Reader selection (single or phrase) (D5 / RT-05…RT-07).
 class _AddVocabSheet extends StatefulWidget {
   const _AddVocabSheet({
     required this.surface,
     required this.lemmaKey,
+    required this.surfaceKey,
     required this.initialContext,
     required this.dictionaryRepository,
   });
 
   final String surface;
   final String lemmaKey;
+  final String surfaceKey;
   final String initialContext;
   final DictionaryRepository dictionaryRepository;
 
@@ -1041,7 +1196,7 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
     try {
       await widget.dictionaryRepository.add(
         lemma: widget.lemmaKey,
-        surfaceKey: DictionaryRepository.normalizeSurface(widget.surface),
+        surfaceKey: widget.surfaceKey,
         translation: trimmedTranslation,
         context: _contextController.text,
       );

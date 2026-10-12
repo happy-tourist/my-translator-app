@@ -1,8 +1,6 @@
 //! Thin FRB export for cue tokenization + morph keys (design D2 / D3).
 //! Domain logic lives in [`crate::tokenize`] and [`crate::lemmatize`].
 
-use std::collections::HashSet;
-
 use crate::lemmatize;
 use crate::tokenize::{self, TokenSpan};
 
@@ -57,21 +55,28 @@ pub fn tokenize_cues(texts: Vec<String>) -> Vec<CueTokensDto> {
         .collect()
 }
 
-/// Set `is_in_vocab` from morph lemma set (casefold both sides before equality).
+/// Set `is_in_vocab` from morph singles **and** phrase windows (design D2).
+///
+/// Thin FRB wrapper over [`lemmatize::mark_vocab_flags`].
 pub fn mark_vocab_tokens(
     cues: Vec<CueTokensDto>,
     vocab_lemmas: Vec<String>,
 ) -> Vec<CueTokensDto> {
-    let vocab: HashSet<String> = vocab_lemmas
-        .into_iter()
-        .map(|s| lemmatize::casefold(s.trim()))
-        .filter(|s| !s.is_empty())
+    let pairs: Vec<Vec<(String, String)>> = cues
+        .iter()
+        .map(|cue| {
+            cue.tokens
+                .iter()
+                .map(|t| (t.surface.clone(), t.lemma_key.clone()))
+                .collect()
+        })
         .collect();
+    let flags = lemmatize::mark_vocab_flags(&pairs, vocab_lemmas);
     cues.into_iter()
-        .map(|mut cue| {
-            for t in &mut cue.tokens {
-                let key = lemmatize::casefold(t.lemma_key.trim());
-                t.is_in_vocab = !key.is_empty() && vocab.contains(&key);
+        .zip(flags)
+        .map(|(mut cue, cue_flags)| {
+            for (t, flag) in cue.tokens.iter_mut().zip(cue_flags) {
+                t.is_in_vocab = flag;
             }
             cue
         })
@@ -120,17 +125,80 @@ mod tests {
         assert!(!marked[0].tokens[2].is_in_vocab);
     }
 
-    /// RH-08: multi-word vocab keys do not mark single-token lemma_keys.
+    /// RH-08: phrase key marks every token in the matched consecutive span.
     #[test]
-    fn mark_vocab_tokens_phrase_keys_do_not_match_tokens() {
+    fn mark_vocab_tokens_phrase_marks_all_span_tokens() {
+        let cues = vec![cue_with(vec![
+            tok(0, "hello", "hello"),
+            tok(1, "world", "world"),
+            tok(2, "other", "other"),
+        ])];
+        let marked =
+            mark_vocab_tokens(cues, vec!["hello world".to_string()]);
+        assert!(marked[0].tokens[0].is_in_vocab);
+        assert!(marked[0].tokens[1].is_in_vocab);
+        assert!(!marked[0].tokens[2].is_in_vocab);
+    }
+
+    /// RH-13: overlapping phrase keys both paint (OR membership).
+    #[test]
+    fn mark_vocab_tokens_overlapping_phrases_both_paint() {
+        let cues = vec![cue_with(vec![
+            tok(0, "a", "a"),
+            tok(1, "b", "b"),
+            tok(2, "c", "c"),
+        ])];
+        let marked = mark_vocab_tokens(
+            cues,
+            vec!["a b".to_string(), "b c".to_string()],
+        );
+        assert!(marked[0].tokens[0].is_in_vocab);
+        assert!(marked[0].tokens[1].is_in_vocab);
+        assert!(marked[0].tokens[2].is_in_vocab);
+    }
+
+    /// RH-14: phrase match is token-join, not cue substring (punct ignored).
+    #[test]
+    fn mark_vocab_tokens_phrase_is_token_join_not_substring() {
+        // Surfaces "hello" / "world" with punct between in raw cue — join still hits.
+        let cues = vec![cue_with(vec![
+            tok(0, "Hello", "hello"),
+            tok(1, "World", "world"),
+        ])];
+        let marked =
+            mark_vocab_tokens(cues, vec!["hello world".to_string()]);
+        assert!(marked[0].tokens[0].is_in_vocab);
+        assert!(marked[0].tokens[1].is_in_vocab);
+    }
+
+    /// Irregular whitespace in phrase dict keys still matches single-space join.
+    #[test]
+    fn mark_vocab_tokens_phrase_collapses_dict_whitespace() {
         let cues = vec![cue_with(vec![
             tok(0, "hello", "hello"),
             tok(1, "world", "world"),
         ])];
         let marked =
-            mark_vocab_tokens(cues, vec!["hello world".to_string()]);
-        assert!(!marked[0].tokens[0].is_in_vocab);
-        assert!(!marked[0].tokens[1].is_in_vocab);
+            mark_vocab_tokens(cues, vec!["hello  world".to_string()]);
+        assert!(marked[0].tokens[0].is_in_vocab);
+        assert!(marked[0].tokens[1].is_in_vocab);
+    }
+
+    /// Morph singles still mark when phrase keys are also present (RH-01/09).
+    #[test]
+    fn mark_vocab_tokens_morph_or_phrase() {
+        let cues = vec![cue_with(vec![
+            tok(0, "Running", "run"),
+            tok(1, "hello", "hello"),
+            tok(2, "world", "world"),
+        ])];
+        let marked = mark_vocab_tokens(
+            cues,
+            vec!["run".to_string(), "hello world".to_string()],
+        );
+        assert!(marked[0].tokens[0].is_in_vocab);
+        assert!(marked[0].tokens[1].is_in_vocab);
+        assert!(marked[0].tokens[2].is_in_vocab);
     }
 
     #[test]

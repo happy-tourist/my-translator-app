@@ -13,8 +13,16 @@ class DictionaryRepository {
 
   final AppDatabase _db;
 
-  /// `trim` + Unicode lowercase for [surfaceKey] / case-insensitive morph lookup.
-  static String normalizeSurface(String surface) => surface.trim().toLowerCase();
+  /// `trim` + Unicode lowercase; collapse internal whitespace to single spaces
+  /// so phrase keys match Rust `casefold(join(surfaces, " "))` (D2 / DE-18).
+  static String normalizeSurface(String surface) {
+    final trimmed = surface.trim().toLowerCase();
+    if (trimmed.isEmpty) return '';
+    return trimmed
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .join(' ');
+  }
 
   /// Adds or upserts by morph [lemma]. Empty lemma/translation → validation.
   Future<DictionaryEntry> add({
@@ -84,12 +92,22 @@ class DictionaryRepository {
   }
 
   /// Lookup by morph lemma (any casing); returns null when absent.
-  Future<DictionaryEntry?> lookup(String lemma) {
+  ///
+  /// Exact match on [normalizeSurface] first; for multi-word keys, also accepts
+  /// legacy rows whose stored `lemma` only differs by irregular whitespace.
+  Future<DictionaryEntry?> lookup(String lemma) async {
     final normalized = normalizeSurface(lemma);
-    if (normalized.isEmpty) return Future.value(null);
-    return (_db.select(
+    if (normalized.isEmpty) return null;
+    final exact = await (_db.select(
       _db.dictionaryEntries,
     )..where((e) => e.lemma.equals(normalized))).getSingleOrNull();
+    if (exact != null) return exact;
+    if (!normalized.contains(RegExp(r'\s'))) return null;
+    final rows = await list();
+    for (final e in rows) {
+      if (normalizeSurface(e.lemma) == normalized) return e;
+    }
+    return null;
   }
 
   /// One-shot stub→morph rewrite (DE-15 / DE-16). Idempotent: skips when every
