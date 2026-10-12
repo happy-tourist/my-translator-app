@@ -985,6 +985,28 @@ void main() {
     expect(find.text('Add to vocabulary'), findsOneWidget);
   });
 
+  testWidgets('RT-17: Retap sole selected token clears selection', (tester) async {
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('readerAddVocabCta')), findsNothing);
+  });
+
   testWidgets('RT-03: Contiguous tap extends selection', (tester) async {
     pumpCues = [
       CueDto(

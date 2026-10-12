@@ -89,6 +89,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   var _loadingTranslation = false;
   var _didRestoreInitialAnchor = false;
 
+  /// Applied as [ScrollablePositionedList.initialScrollIndex] on original
+  /// remount (Show/Hide split) so the first frame is not cue 0 (RS-10/11).
+  var _originalInitialScrollIndex = 0;
+  var _originalInitialAlignment = 0.0;
+
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
 
@@ -361,8 +366,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
         return;
       }
 
-      // Single selected word tapped again → no-op.
+      // Single selected word tapped again → clear selection (hide CTA).
       if (t == start && t == end) {
+        _cancelFlash();
+        _activeCueIndex = null;
+        _selectionStart = null;
+        _selectionEnd = null;
         return;
       }
 
@@ -475,6 +484,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       return;
     }
 
+    final scrollAnchor = _captureOriginalScrollAnchor();
+    _scheduleOriginalScrollRestore(scrollAnchor);
+
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -490,6 +502,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
 
     if (!mounted) return;
+    _restoreOriginalScrollAnchor(scrollAnchor);
     if (saved == true) {
       _clearSelection();
       await _refreshVocabMarks();
@@ -529,6 +542,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
         ? entry.lemma
         : tokens[tokenIndex].surface;
 
+    final scrollAnchor = _captureOriginalScrollAnchor();
+    _scheduleOriginalScrollRestore(scrollAnchor);
+
     final changed = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -542,6 +558,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
 
     if (!mounted) return;
+    _restoreOriginalScrollAnchor(scrollAnchor);
     if (changed == true) {
       await _refreshVocabMarks();
     }
@@ -559,7 +576,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   void _toggleSplit() {
     // RS-10 / RS-11 / D7: remounting the original list resets scroll — capture
-    // top-visible anchor before Show *and* Hide, restore after layout.
+    // top-visible anchor before Show *and* Hide; seed initialScrollIndex so
+    // the first painted frame is not cue 0; jumpTo after layout as backup.
     final enabling = !_splitEnabled;
     final anchor = _topVisible(_originalPositions);
     final restoreIndex = (anchor?.index ?? 0).clamp(
@@ -569,7 +587,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final restoreAlignment =
         (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
 
-    setState(() => _splitEnabled = enabling);
+    setState(() {
+      _originalInitialScrollIndex = restoreIndex;
+      _originalInitialAlignment = restoreAlignment;
+      _splitEnabled = enabling;
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -771,6 +793,37 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return best;
   }
 
+  ({int index, double alignment}) _captureOriginalScrollAnchor() {
+    final anchor = _topVisible(_originalPositions);
+    final maxIndex =
+        widget.originalCues.isEmpty ? 0 : widget.originalCues.length - 1;
+    return (
+      index: (anchor?.index ?? 0).clamp(0, maxIndex),
+      alignment: (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0),
+    );
+  }
+
+  void _restoreOriginalScrollAnchor(({int index, double alignment}) anchor) {
+    if (!mounted || widget.originalCues.isEmpty) return;
+    if (!_originalScrollController.isAttached) return;
+    _originalScrollController.jumpTo(
+      index: anchor.index,
+      alignment: anchor.alignment,
+    );
+  }
+
+  /// Re-apply scroll after sheet/keyboard layout pulses (same idea as split).
+  void _scheduleOriginalScrollRestore(({int index, double alignment}) anchor) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _restoreOriginalScrollAnchor(anchor);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _restoreOriginalScrollAnchor(anchor);
+      });
+    });
+  }
+
   Future<void> _syncPanes({
     required bool fromOriginal,
     int? sourceIndex,
@@ -877,6 +930,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       key: const Key('readerScreen'),
+      // Sheet handles keyboard via viewInsets; resizing body jumps
+      // ScrollablePositionedList toward the top.
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: Text(widget.title),
         leading: IconButton(
@@ -1101,6 +1157,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
     required ItemPositionsListener itemPositionsListener,
     required bool fromOriginal,
   }) {
+    final maxIndex = cues.isEmpty ? 0 : cues.length - 1;
+    final initialIndex = fromOriginal
+        ? _originalInitialScrollIndex.clamp(0, maxIndex)
+        : 0;
+    final initialAlignment =
+        fromOriginal ? _originalInitialAlignment.clamp(0.0, 1.0) : 0.0;
+
     return NotificationListener<ScrollNotification>(
       onNotification: (n) =>
           _onScrollNotification(n, fromOriginal: fromOriginal),
@@ -1108,6 +1171,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
         key: listKey,
         itemScrollController: itemScrollController,
         itemPositionsListener: itemPositionsListener,
+        initialScrollIndex: initialIndex,
+        initialAlignment: initialAlignment,
         padding: const EdgeInsets.symmetric(vertical: 8),
         itemCount: cues.length,
         itemBuilder: (context, index) {
