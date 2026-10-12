@@ -1073,6 +1073,17 @@ class $DictionaryEntriesTable extends DictionaryEntries
     requiredDuringInsert: true,
     defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'),
   );
+  static const VerificationMeta _surfaceKeyMeta = const VerificationMeta(
+    'surfaceKey',
+  );
+  @override
+  late final GeneratedColumn<String> surfaceKey = GeneratedColumn<String>(
+    'surface_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _translationMeta = const VerificationMeta(
     'translation',
   );
@@ -1123,6 +1134,7 @@ class $DictionaryEntriesTable extends DictionaryEntries
   List<GeneratedColumn> get $columns => [
     id,
     lemma,
+    surfaceKey,
     translation,
     context,
     createdAt,
@@ -1150,6 +1162,12 @@ class $DictionaryEntriesTable extends DictionaryEntries
       );
     } else if (isInserting) {
       context.missing(_lemmaMeta);
+    }
+    if (data.containsKey('surface_key')) {
+      context.handle(
+        _surfaceKeyMeta,
+        surfaceKey.isAcceptableOrUnknown(data['surface_key']!, _surfaceKeyMeta),
+      );
     }
     if (data.containsKey('translation')) {
       context.handle(
@@ -1197,6 +1215,10 @@ class $DictionaryEntriesTable extends DictionaryEntries
         DriftSqlType.string,
         data['${effectivePrefix}lemma'],
       )!,
+      surfaceKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}surface_key'],
+      ),
       translation: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}translation'],
@@ -1225,6 +1247,9 @@ class $DictionaryEntriesTable extends DictionaryEntries
 class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
   final int id;
   final String lemma;
+
+  /// Casefold surface / legacy stub key (not unique). Null until stub→morph migrate.
+  final String? surfaceKey;
   final String translation;
   final String? context;
   final DateTime createdAt;
@@ -1232,6 +1257,7 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
   const DictionaryEntry({
     required this.id,
     required this.lemma,
+    this.surfaceKey,
     required this.translation,
     this.context,
     required this.createdAt,
@@ -1242,6 +1268,9 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
     map['lemma'] = Variable<String>(lemma);
+    if (!nullToAbsent || surfaceKey != null) {
+      map['surface_key'] = Variable<String>(surfaceKey);
+    }
     map['translation'] = Variable<String>(translation);
     if (!nullToAbsent || context != null) {
       map['context'] = Variable<String>(context);
@@ -1255,6 +1284,9 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
     return DictionaryEntriesCompanion(
       id: Value(id),
       lemma: Value(lemma),
+      surfaceKey: surfaceKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(surfaceKey),
       translation: Value(translation),
       context: context == null && nullToAbsent
           ? const Value.absent()
@@ -1272,6 +1304,7 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
     return DictionaryEntry(
       id: serializer.fromJson<int>(json['id']),
       lemma: serializer.fromJson<String>(json['lemma']),
+      surfaceKey: serializer.fromJson<String?>(json['surfaceKey']),
       translation: serializer.fromJson<String>(json['translation']),
       context: serializer.fromJson<String?>(json['context']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -1284,6 +1317,7 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
       'lemma': serializer.toJson<String>(lemma),
+      'surfaceKey': serializer.toJson<String?>(surfaceKey),
       'translation': serializer.toJson<String>(translation),
       'context': serializer.toJson<String?>(context),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -1294,6 +1328,7 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
   DictionaryEntry copyWith({
     int? id,
     String? lemma,
+    Value<String?> surfaceKey = const Value.absent(),
     String? translation,
     Value<String?> context = const Value.absent(),
     DateTime? createdAt,
@@ -1301,6 +1336,7 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
   }) => DictionaryEntry(
     id: id ?? this.id,
     lemma: lemma ?? this.lemma,
+    surfaceKey: surfaceKey.present ? surfaceKey.value : this.surfaceKey,
     translation: translation ?? this.translation,
     context: context.present ? context.value : this.context,
     createdAt: createdAt ?? this.createdAt,
@@ -1310,6 +1346,9 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
     return DictionaryEntry(
       id: data.id.present ? data.id.value : this.id,
       lemma: data.lemma.present ? data.lemma.value : this.lemma,
+      surfaceKey: data.surfaceKey.present
+          ? data.surfaceKey.value
+          : this.surfaceKey,
       translation: data.translation.present
           ? data.translation.value
           : this.translation,
@@ -1324,6 +1363,7 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
     return (StringBuffer('DictionaryEntry(')
           ..write('id: $id, ')
           ..write('lemma: $lemma, ')
+          ..write('surfaceKey: $surfaceKey, ')
           ..write('translation: $translation, ')
           ..write('context: $context, ')
           ..write('createdAt: $createdAt, ')
@@ -1333,14 +1373,22 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, lemma, translation, context, createdAt, updatedAt);
+  int get hashCode => Object.hash(
+    id,
+    lemma,
+    surfaceKey,
+    translation,
+    context,
+    createdAt,
+    updatedAt,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is DictionaryEntry &&
           other.id == this.id &&
           other.lemma == this.lemma &&
+          other.surfaceKey == this.surfaceKey &&
           other.translation == this.translation &&
           other.context == this.context &&
           other.createdAt == this.createdAt &&
@@ -1350,6 +1398,7 @@ class DictionaryEntry extends DataClass implements Insertable<DictionaryEntry> {
 class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
   final Value<int> id;
   final Value<String> lemma;
+  final Value<String?> surfaceKey;
   final Value<String> translation;
   final Value<String?> context;
   final Value<DateTime> createdAt;
@@ -1357,6 +1406,7 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
   const DictionaryEntriesCompanion({
     this.id = const Value.absent(),
     this.lemma = const Value.absent(),
+    this.surfaceKey = const Value.absent(),
     this.translation = const Value.absent(),
     this.context = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -1365,6 +1415,7 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
   DictionaryEntriesCompanion.insert({
     this.id = const Value.absent(),
     required String lemma,
+    this.surfaceKey = const Value.absent(),
     required String translation,
     this.context = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -1374,6 +1425,7 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
   static Insertable<DictionaryEntry> custom({
     Expression<int>? id,
     Expression<String>? lemma,
+    Expression<String>? surfaceKey,
     Expression<String>? translation,
     Expression<String>? context,
     Expression<DateTime>? createdAt,
@@ -1382,6 +1434,7 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (lemma != null) 'lemma': lemma,
+      if (surfaceKey != null) 'surface_key': surfaceKey,
       if (translation != null) 'translation': translation,
       if (context != null) 'context': context,
       if (createdAt != null) 'created_at': createdAt,
@@ -1392,6 +1445,7 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
   DictionaryEntriesCompanion copyWith({
     Value<int>? id,
     Value<String>? lemma,
+    Value<String?>? surfaceKey,
     Value<String>? translation,
     Value<String?>? context,
     Value<DateTime>? createdAt,
@@ -1400,6 +1454,7 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
     return DictionaryEntriesCompanion(
       id: id ?? this.id,
       lemma: lemma ?? this.lemma,
+      surfaceKey: surfaceKey ?? this.surfaceKey,
       translation: translation ?? this.translation,
       context: context ?? this.context,
       createdAt: createdAt ?? this.createdAt,
@@ -1415,6 +1470,9 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
     }
     if (lemma.present) {
       map['lemma'] = Variable<String>(lemma.value);
+    }
+    if (surfaceKey.present) {
+      map['surface_key'] = Variable<String>(surfaceKey.value);
     }
     if (translation.present) {
       map['translation'] = Variable<String>(translation.value);
@@ -1436,6 +1494,7 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
     return (StringBuffer('DictionaryEntriesCompanion(')
           ..write('id: $id, ')
           ..write('lemma: $lemma, ')
+          ..write('surfaceKey: $surfaceKey, ')
           ..write('translation: $translation, ')
           ..write('context: $context, ')
           ..write('createdAt: $createdAt, ')
@@ -2369,6 +2428,7 @@ typedef $$DictionaryEntriesTableCreateCompanionBuilder =
     DictionaryEntriesCompanion Function({
       Value<int> id,
       required String lemma,
+      Value<String?> surfaceKey,
       required String translation,
       Value<String?> context,
       Value<DateTime> createdAt,
@@ -2378,6 +2438,7 @@ typedef $$DictionaryEntriesTableUpdateCompanionBuilder =
     DictionaryEntriesCompanion Function({
       Value<int> id,
       Value<String> lemma,
+      Value<String?> surfaceKey,
       Value<String> translation,
       Value<String?> context,
       Value<DateTime> createdAt,
@@ -2400,6 +2461,11 @@ class $$DictionaryEntriesTableFilterComposer
 
   ColumnFilters<String> get lemma => $composableBuilder(
     column: $table.lemma,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get surfaceKey => $composableBuilder(
+    column: $table.surfaceKey,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2443,6 +2509,11 @@ class $$DictionaryEntriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get surfaceKey => $composableBuilder(
+    column: $table.surfaceKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get translation => $composableBuilder(
     column: $table.translation,
     builder: (column) => ColumnOrderings(column),
@@ -2478,6 +2549,11 @@ class $$DictionaryEntriesTableAnnotationComposer
 
   GeneratedColumn<String> get lemma =>
       $composableBuilder(column: $table.lemma, builder: (column) => column);
+
+  GeneratedColumn<String> get surfaceKey => $composableBuilder(
+    column: $table.surfaceKey,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get translation => $composableBuilder(
     column: $table.translation,
@@ -2536,6 +2612,7 @@ class $$DictionaryEntriesTableTableManager
               ({
                 Value<int> id = const Value.absent(),
                 Value<String> lemma = const Value.absent(),
+                Value<String?> surfaceKey = const Value.absent(),
                 Value<String> translation = const Value.absent(),
                 Value<String?> context = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -2543,6 +2620,7 @@ class $$DictionaryEntriesTableTableManager
               }) => DictionaryEntriesCompanion(
                 id: id,
                 lemma: lemma,
+                surfaceKey: surfaceKey,
                 translation: translation,
                 context: context,
                 createdAt: createdAt,
@@ -2552,6 +2630,7 @@ class $$DictionaryEntriesTableTableManager
               ({
                 Value<int> id = const Value.absent(),
                 required String lemma,
+                Value<String?> surfaceKey = const Value.absent(),
                 required String translation,
                 Value<String?> context = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -2559,6 +2638,7 @@ class $$DictionaryEntriesTableTableManager
               }) => DictionaryEntriesCompanion.insert(
                 id: id,
                 lemma: lemma,
+                surfaceKey: surfaceKey,
                 translation: translation,
                 context: context,
                 createdAt: createdAt,

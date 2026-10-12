@@ -9,11 +9,28 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
-/// Batch-tokenize cue display strings. One [`CueTokensDto`] per input, same order.
+/// Batch-tokenize + lemmatize cue display strings. One [`CueTokensDto`] per input.
 ///
+/// `is_in_vocab` is always `false` until [`mark_vocab_tokens`].
 /// Infallible for valid Rust `String` (UTF-8): empty input → empty `tokens`.
 Future<List<CueTokensDto>> tokenizeCues({required List<String> texts}) =>
     RustLib.instance.api.crateApiTokenizeTokenizeCues(texts: texts);
+
+/// Set `is_in_vocab` from morph lemma set (casefold both sides before equality).
+Future<List<CueTokensDto>> markVocabTokens({
+  required List<CueTokensDto> cues,
+  required List<String> vocabLemmas,
+}) => RustLib.instance.api.crateApiTokenizeMarkVocabTokens(
+  cues: cues,
+  vocabLemmas: vocabLemmas,
+);
+
+/// Same D3 algorithm without tokenize — Vocab UI / stub→morph migration.
+/// One output per input, same order. Whitespace surfaces → casefold only.
+Future<List<String>> lemmaKeysForSurfaces({required List<String> surfaces}) =>
+    RustLib.instance.api.crateApiTokenizeLemmaKeysForSurfaces(
+      surfaces: surfaces,
+    );
 
 /// Tokens for one cue in a batch (index matches input order).
 class CueTokensDto {
@@ -48,11 +65,19 @@ class TokenDto {
   /// 0-based among word tokens in this cue.
   final int tokenIndex;
 
+  /// Morph lemma key (D3); identity for dictionary membership.
+  final String lemmaKey;
+
+  /// Set by [`mark_vocab_tokens`]; false after [`tokenize_cues`].
+  final bool isInVocab;
+
   const TokenDto({
     required this.surface,
     required this.charStart,
     required this.charEnd,
     required this.tokenIndex,
+    required this.lemmaKey,
+    required this.isInVocab,
   });
 
   @override
@@ -60,7 +85,9 @@ class TokenDto {
       surface.hashCode ^
       charStart.hashCode ^
       charEnd.hashCode ^
-      tokenIndex.hashCode;
+      tokenIndex.hashCode ^
+      lemmaKey.hashCode ^
+      isInVocab.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -70,5 +97,7 @@ class TokenDto {
           surface == other.surface &&
           charStart == other.charStart &&
           charEnd == other.charEnd &&
-          tokenIndex == other.tokenIndex;
+          tokenIndex == other.tokenIndex &&
+          lemmaKey == other.lemmaKey &&
+          isInVocab == other.isInVocab;
 }

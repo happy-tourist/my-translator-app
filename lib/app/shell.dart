@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
+import 'package:my_translator_app/data/dictionary/lemma_keys_for_surfaces_fn.dart';
 import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_content_store_platform.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/features/upload/library_screen.dart';
 import 'package:my_translator_app/features/vocab/vocabulary_screen.dart';
+import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
 
 /// Product shell: Library (default) + Vocabulary.
 class AppShell extends StatefulWidget {
@@ -18,6 +20,7 @@ class AppShell extends StatefulWidget {
     this.folderRepository,
     this.documentRepository,
     this.dictionaryRepository,
+    this.lemmaKeysForSurfaces,
   });
 
   final AppDatabase database;
@@ -25,6 +28,7 @@ class AppShell extends StatefulWidget {
   final FolderRepository? folderRepository;
   final DocumentRepository? documentRepository;
   final DictionaryRepository? dictionaryRepository;
+  final LemmaKeysForSurfacesFn? lemmaKeysForSurfaces;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -36,6 +40,7 @@ class _AppShellState extends State<AppShell> {
   late final FolderRepository _folders;
   late final DocumentRepository _documents;
   late final DictionaryRepository _dictionary;
+  late final LemmaKeysForSurfacesFn _lemmaKeysForSurfaces;
 
   @override
   void initState() {
@@ -49,6 +54,9 @@ class _AppShellState extends State<AppShell> {
         DocumentRepository(widget.database, contentStore: _store);
     _dictionary =
         widget.dictionaryRepository ?? DictionaryRepository(widget.database);
+    _lemmaKeysForSurfaces =
+        widget.lemmaKeysForSurfaces ??
+        ((surfaces) => rust_tokenize.lemmaKeysForSurfaces(surfaces: surfaces));
   }
 
   @override
@@ -59,7 +67,10 @@ class _AppShellState extends State<AppShell> {
         documentRepository: _documents,
         dictionaryRepository: _dictionary,
       ),
-      VocabularyScreen(dictionaryRepository: _dictionary),
+      VocabularyScreen(
+        dictionaryRepository: _dictionary,
+        lemmaKeysForSurfaces: _lemmaKeysForSurfaces,
+      ),
     ];
 
     return Scaffold(

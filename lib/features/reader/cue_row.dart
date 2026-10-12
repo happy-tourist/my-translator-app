@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:my_translator_app/app/theme.dart';
 import 'package:my_translator_app/features/reader/cue_char_slice.dart';
 import 'package:my_translator_app/features/reader/cue_time_format.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart';
@@ -9,7 +10,7 @@ import 'package:my_translator_app/src/rust/api/tokenize.dart';
 ///
 /// When [tokens] is non-null and non-empty on the original pane, word spans
 /// become tappable hit targets (`readerCueToken_*`). Translation pane must
-/// omit tokens (RT-08).
+/// omit tokens (RT-08 / RH-12).
 class CueRow extends StatelessWidget {
   const CueRow({
     super.key,
@@ -19,7 +20,6 @@ class CueRow extends StatelessWidget {
     this.tokens,
     this.selectionStart,
     this.selectionEnd,
-    this.flashTokenIndex,
     this.onTokenTap,
   });
 
@@ -35,11 +35,9 @@ class CueRow extends StatelessWidget {
   final List<TokenDto>? tokens;
 
   /// Inclusive selection range within [tokens] when this cue is active.
+  /// Single-token Add: [selectionStart] == [selectionEnd].
   final int? selectionStart;
   final int? selectionEnd;
-
-  /// Brief gap-reset flash target (D5).
-  final int? flashTokenIndex;
 
   final ValueChanged<int>? onTokenTap;
 
@@ -75,7 +73,6 @@ class CueRow extends StatelessWidget {
               textKey: Key('${keyPrefix}Text_${cue.index}'),
               selectionStart: selectionStart,
               selectionEnd: selectionEnd,
-              flashTokenIndex: flashTokenIndex,
               onTokenTap: onTokenTap!,
             )
           else
@@ -99,7 +96,6 @@ class _SelectableCueText extends StatelessWidget {
     required this.textKey,
     required this.selectionStart,
     required this.selectionEnd,
-    required this.flashTokenIndex,
     required this.onTokenTap,
   });
 
@@ -110,20 +106,23 @@ class _SelectableCueText extends StatelessWidget {
   final Key textKey;
   final int? selectionStart;
   final int? selectionEnd;
-  final int? flashTokenIndex;
   final ValueChanged<int> onTokenTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Design D5 / highlight.md: paint from ReaderColors (never silent no-op).
+    final readerColors = Theme.of(context).extension<ReaderColors>() ??
+        (Theme.of(context).brightness == Brightness.dark
+            ? ReaderColors.dark
+            : ReaderColors.light);
     final selectedStyle = (bodyStyle ?? const TextStyle()).copyWith(
       backgroundColor: scheme.primaryContainer,
       color: scheme.onPrimaryContainer,
     );
-    final flashStyle = (bodyStyle ?? const TextStyle()).copyWith(
-      backgroundColor: scheme.tertiaryContainer,
-      color: scheme.onTertiaryContainer,
-      fontWeight: FontWeight.w700,
+    final highlightStyle = (bodyStyle ?? const TextStyle()).copyWith(
+      backgroundColor: readerColors.lemmaHighlight,
+      color: readerColors.lemmaHighlightOn,
     );
 
     final spans = <InlineSpan>[];
@@ -149,10 +148,10 @@ class _SelectableCueText extends StatelessWidget {
           selectionEnd != null &&
           idx >= selectionStart! &&
           idx <= selectionEnd!;
-      final flashing = flashTokenIndex == idx;
-      final style = flashing
-          ? flashStyle
-          : (inSelection ? selectedStyle : bodyStyle);
+      // Selection chrome may coexist with vocab highlight; selection wins.
+      final style = inSelection
+          ? selectedStyle
+          : (token.isInVocab ? highlightStyle : bodyStyle);
       // WidgetSpan (not TextSpan+recognizer): Keys for D9 finders need a Widget.
       spans.add(
         WidgetSpan(

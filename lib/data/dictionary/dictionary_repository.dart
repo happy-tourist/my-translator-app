@@ -2,25 +2,31 @@ import 'package:drift/drift.dart';
 
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_exceptions.dart';
+import 'package:my_translator_app/data/dictionary/lemma_keys_for_surfaces_fn.dart';
 
-/// Drift-backed personal vocabulary CRUD (`dictionary/entries`, design D4).
+/// Drift-backed personal vocabulary CRUD (`dictionary/entries`, design D4 / D5.1).
+///
+/// Call site supplies morph [lemma] (Reader token / FRB `lemmaKeysForSurfaces`).
+/// Repository does **not** call WordNet / FRB itself.
 class DictionaryRepository {
   DictionaryRepository(this._db);
 
   final AppDatabase _db;
 
-  /// `trim` + Unicode case-fold / lowercase — UNIQUE lookup key.
-  static String normalizeLemma(String lemma) => lemma.trim().toLowerCase();
+  /// `trim` + Unicode lowercase for [surfaceKey] / case-insensitive morph lookup.
+  static String normalizeSurface(String surface) => surface.trim().toLowerCase();
 
-  /// Adds or upserts by normalized lemma. Empty lemma/translation → validation.
+  /// Adds or upserts by morph [lemma]. Empty lemma/translation → validation.
   Future<DictionaryEntry> add({
     required String lemma,
+    required String surfaceKey,
     required String translation,
     String? context,
   }) async {
-    final normalized = normalizeLemma(lemma);
+    final normalizedLemma = normalizeSurface(lemma);
+    final normalizedSurface = normalizeSurface(surfaceKey);
     final trimmedTranslation = translation.trim();
-    if (normalized.isEmpty) {
+    if (normalizedLemma.isEmpty) {
       throw DictionaryValidationException('Lemma must not be empty');
     }
     if (trimmedTranslation.isEmpty) {
@@ -31,27 +37,29 @@ class DictionaryRepository {
     final contextValue =
         (trimmedContext == null || trimmedContext.isEmpty) ? null : trimmedContext;
 
-    final existing = await lookup(normalized);
+    final existing = await lookup(normalizedLemma);
     final now = DateTime.now();
     if (existing != null) {
       await (_db.update(_db.dictionaryEntries)
-            ..where((e) => e.lemma.equals(normalized)))
+            ..where((e) => e.lemma.equals(normalizedLemma)))
           .write(
             DictionaryEntriesCompanion(
+              surfaceKey: Value(normalizedSurface),
               translation: Value(trimmedTranslation),
               context: Value(contextValue),
               updatedAt: Value(now),
             ),
           );
-      return (await lookup(normalized))!;
+      return (await lookup(normalizedLemma))!;
     }
 
     final id = await _db
         .into(_db.dictionaryEntries)
         .insert(
           DictionaryEntriesCompanion.insert(
-            lemma: normalized,
+            lemma: normalizedLemma,
             translation: trimmedTranslation,
+            surfaceKey: Value(normalizedSurface),
             context: Value(contextValue),
           ),
         );
@@ -75,12 +83,65 @@ class DictionaryRepository {
     }
   }
 
-  /// Lookup by lemma (any casing); returns null when absent.
+  /// Lookup by morph lemma (any casing); returns null when absent.
   Future<DictionaryEntry?> lookup(String lemma) {
-    final normalized = normalizeLemma(lemma);
+    final normalized = normalizeSurface(lemma);
     if (normalized.isEmpty) return Future.value(null);
     return (_db.select(
       _db.dictionaryEntries,
     )..where((e) => e.lemma.equals(normalized))).getSingleOrNull();
+  }
+
+  /// One-shot stub→morph rewrite (DE-15 / DE-16). Idempotent: skips when every
+  /// row already has [DictionaryEntry.surfaceKey]. Does not embed WordNet —
+  /// call site injects [lemmaKeysForSurfaces] (FRB or test fake).
+  Future<void> migrateStubKeysIfNeeded({
+    required LemmaKeysForSurfacesFn lemmaKeysForSurfaces,
+  }) async {
+    final pending = await (_db.select(
+      _db.dictionaryEntries,
+    )..where((e) => e.surfaceKey.isNull())).get();
+    if (pending.isEmpty) return;
+
+    final oldLemmas = pending.map((e) => e.lemma).toList();
+    final morphKeys = await lemmaKeysForSurfaces(oldLemmas);
+    if (morphKeys.length != oldLemmas.length) {
+      throw StateError(
+        'lemmaKeysForSurfaces length mismatch: '
+        '${morphKeys.length} != ${oldLemmas.length}',
+      );
+    }
+
+    final byMorph = <String, List<DictionaryEntry>>{};
+    for (var i = 0; i < pending.length; i++) {
+      final rawMorph = morphKeys[i];
+      final morph = normalizeSurface(rawMorph).isEmpty
+          ? normalizeSurface(oldLemmas[i])
+          : normalizeSurface(rawMorph);
+      byMorph.putIfAbsent(morph, () => []).add(pending[i]);
+    }
+
+    await _db.transaction(() async {
+      for (final entry in byMorph.entries) {
+        final morph = entry.key;
+        final rows = List<DictionaryEntry>.from(entry.value)
+          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        final winner = rows.first;
+        for (final loser in rows.skip(1)) {
+          await (_db.delete(
+            _db.dictionaryEntries,
+          )..where((e) => e.id.equals(loser.id))).go();
+        }
+        await (_db.update(_db.dictionaryEntries)
+              ..where((e) => e.id.equals(winner.id)))
+            .write(
+              DictionaryEntriesCompanion(
+                lemma: Value(morph),
+                // Winner's legacy stub / casefold surface (design D4).
+                surfaceKey: Value(winner.lemma),
+              ),
+            );
+      }
+    });
   }
 }

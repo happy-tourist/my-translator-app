@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:my_translator_app/app/theme.dart';
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
 import 'package:my_translator_app/data/library/document_content_store.dart';
@@ -47,16 +48,24 @@ Future<List<CueTokensDto>> _emptyTokenize(List<String> texts) async => [
     ];
 
 /// Word-like tokens with char spans matching [text] (for fake TokenizeCuesFn).
-List<TokenDto> _tokensFor(String text) {
+/// Optional [lemmaKeys] overrides morph keys by surface (casefold lookup).
+List<TokenDto> _tokensFor(
+  String text, {
+  Map<String, String>? lemmaKeys,
+}) {
   final tokens = <TokenDto>[];
   var index = 0;
   for (final match in RegExp(r"\S+").allMatches(text)) {
+    final surface = match.group(0)!;
+    final lower = surface.toLowerCase();
     tokens.add(
       TokenDto(
-        surface: match.group(0)!,
+        surface: surface,
         charStart: match.start,
         charEnd: match.end,
         tokenIndex: index++,
+        lemmaKey: lemmaKeys?[lower] ?? lower,
+        isInVocab: false,
       ),
     );
   }
@@ -68,15 +77,78 @@ Future<List<CueTokensDto>> _tokenizeFromTexts(List<String> texts) async => [
         CueTokensDto(cueIndex: i, tokens: _tokensFor(texts[i])),
     ];
 
+/// Fake morph: running/ran → run (RH-01 wordforms).
+Future<List<CueTokensDto>> _tokenizeWithMorphLemmas(List<String> texts) async {
+  const morph = {
+    'running': 'run',
+    'ran': 'run',
+    'dogs': 'dog',
+  };
+  return [
+    for (var i = 0; i < texts.length; i++)
+      CueTokensDto(
+        cueIndex: i,
+        tokens: _tokensFor(texts[i], lemmaKeys: morph),
+      ),
+  ];
+}
+
+/// Fake mark seam: sets `isInVocab` from Drift lemma set (RH-09 compute path).
+Future<List<CueTokensDto>> _fakeMarkVocabTokens({
+  required List<CueTokensDto> cues,
+  required List<String> vocabLemmas,
+}) async {
+  final set = vocabLemmas.map((l) => l.toLowerCase()).toSet();
+  return [
+    for (final cue in cues)
+      CueTokensDto(
+        cueIndex: cue.cueIndex,
+        tokens: [
+          for (final t in cue.tokens)
+            TokenDto(
+              surface: t.surface,
+              charStart: t.charStart,
+              charEnd: t.charEnd,
+              tokenIndex: t.tokenIndex,
+              lemmaKey: t.lemmaKey,
+              isInVocab: set.contains(t.lemmaKey.toLowerCase()),
+            ),
+        ],
+      ),
+  ];
+}
+
 class _FakeTokenize {
   int callCount = 0;
   Object? throwError;
+  Future<List<CueTokensDto>> Function(List<String>)? impl;
 
   Future<List<CueTokensDto>> call(List<String> texts) async {
     callCount++;
     if (throwError != null) throw throwError!;
-    return _tokenizeFromTexts(texts);
+    return (impl ?? _tokenizeFromTexts)(texts);
   }
+}
+
+class _FakeMark {
+  int callCount = 0;
+  List<String>? lastVocabLemmas;
+
+  Future<List<CueTokensDto>> call({
+    required List<CueTokensDto> cues,
+    required List<String> vocabLemmas,
+  }) async {
+    callCount++;
+    lastVocabLemmas = List<String>.from(vocabLemmas);
+    return _fakeMarkVocabTokens(cues: cues, vocabLemmas: vocabLemmas);
+  }
+}
+
+Color? _tokenBackground(WidgetTester tester, Key tokenKey) {
+  final text = tester.widget<Text>(
+    find.descendant(of: find.byKey(tokenKey), matching: find.byType(Text)),
+  );
+  return text.style?.backgroundColor;
 }
 
 void main() {
@@ -95,6 +167,7 @@ void main() {
   ReadingAnchor? pumpInitialReadingAnchor;
   ParseSubtitlesFn? pumpParse;
   TokenizeCuesFn? pumpTokenize;
+  MarkVocabTokensFn? pumpMark;
   ReaderTranslationPicker? pumpPicker;
 
   setUp(() {
@@ -110,6 +183,7 @@ void main() {
     pumpInitialReadingAnchor = null;
     pumpParse = null;
     pumpTokenize = _emptyTokenize;
+    pumpMark = _fakeMarkVocabTokens;
     pumpPicker = null;
   });
 
@@ -131,6 +205,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
         home: ReaderScreen(
           title: pumpTitle,
           originalCues: pumpCues,
@@ -142,11 +218,12 @@ void main() {
           initialReadingAnchor: pumpInitialReadingAnchor,
           parseSubtitles: pumpParse,
           tokenizeCues: pumpTokenize,
+          markVocabTokens: pumpMark,
           filePicker: pumpPicker,
         ),
       ),
     );
-    // Allow batch tokenize (injectable) to settle without FRB.
+    // Allow batch tokenize+mark (injectable) to settle without FRB.
     await tester.pump();
   }
 
@@ -246,6 +323,7 @@ void main() {
                           documentRepository: documents,
                           dictionaryRepository: dictionary,
                           tokenizeCues: _emptyTokenize,
+                          markVocabTokens: _fakeMarkVocabTokens,
                         ),
                       ),
                     );
@@ -868,38 +946,48 @@ void main() {
     expect(find.text('Add to vocabulary'), findsOneWidget);
   });
 
-  testWidgets('RT-03: Contiguous tap extends selection', (tester) async {
-    pumpCues = [
-      CueDto(
-        index: 0,
-        startMs: BigInt.from(0),
-        endMs: BigInt.from(1000),
-        textLines: ['hello world'],
-      ),
-    ];
-    pumpTokenize = _tokenizeFromTexts;
-    await pumpReader(tester);
-    await tester.pumpAndSettle();
+  testWidgets(
+    'RT-03: Contiguous tap replaces with single token (no multi-token)',
+    (tester) async {
+      pumpCues = [
+        CueDto(
+          index: 0,
+          startMs: BigInt.from(0),
+          endMs: BigInt.from(1000),
+          textLines: ['hello world'],
+        ),
+      ];
+      pumpTokenize = _tokenizeFromTexts;
+      await pumpReader(tester);
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('readerCueToken_0_1')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('readerCueToken_0_1')));
+      await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
+      expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('readerAddVocabCta')));
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('readerAddVocabSurface')),
-        matching: find.text('hello world'),
-      ),
-      findsOneWidget,
-    );
-  });
+      await tester.tap(find.byKey(const Key('readerAddVocabCta')));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('readerAddVocabSurface')),
+          matching: find.text('world'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('readerAddVocabSurface')),
+          matching: find.text('hello world'),
+        ),
+        findsNothing,
+      );
+    },
+  );
 
-  testWidgets('RT-04: Non-contiguous tap resets anchor + ~300ms feedback', (
+  testWidgets('RT-04: Non-contiguous tap resets to new single token', (
     tester,
   ) async {
     pumpCues = [
@@ -919,20 +1007,17 @@ void main() {
     await tester.tap(find.byKey(const Key('readerCueToken_0_1')));
     await tester.pumpAndSettle();
 
-    // Gap: skip token 2, tap token 3.
+    // Gap: skip token 2, tap token 3 — replace, no flash.
     await tester.tap(find.byKey(const Key('readerCueToken_0_3')));
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    final flashText = tester.widget<Text>(
+    final tapped = tester.widget<Text>(
       find.descendant(
         of: find.byKey(const Key('readerCueToken_0_3')),
         matching: find.byType(Text),
       ),
     );
-    expect(flashText.style?.fontWeight, FontWeight.w700);
-
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pumpAndSettle();
+    expect(tapped.style?.fontWeight, isNot(FontWeight.w700));
 
     expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
     await tester.tap(find.byKey(const Key('readerAddVocabCta')));
@@ -992,10 +1077,10 @@ void main() {
         index: 0,
         startMs: BigInt.from(0),
         endMs: BigInt.from(1000),
-        textLines: ['hello world'],
+        textLines: ['Running world'],
       ),
     ];
-    pumpTokenize = _tokenizeFromTexts;
+    pumpTokenize = _tokenizeWithMorphLemmas;
     await pumpReader(tester);
     await tester.pumpAndSettle();
 
@@ -1006,7 +1091,7 @@ void main() {
 
     await tester.enterText(
       find.byKey(const Key('readerAddVocabTranslation')),
-      'привет',
+      'бежать',
     );
     await tester.tap(find.byKey(const Key('readerAddVocabSave')));
     await tester.pumpAndSettle();
@@ -1014,10 +1099,12 @@ void main() {
     expect(find.byKey(const Key('readerAddVocabSheet')), findsNothing);
     expect(find.byKey(const Key('readerAddVocabCta')), findsNothing);
 
-    final entry = await dictionary.lookup('hello');
+    final entry = await dictionary.lookup('run');
     expect(entry, isNotNull);
-    expect(entry!.translation, 'привет');
-    expect(entry.context, 'hello world');
+    expect(entry!.lemma, 'run');
+    expect(entry.surfaceKey, 'running');
+    expect(entry.translation, 'бежать');
+    expect(entry.context, 'Running world');
     expect(await dictionary.list(), hasLength(1));
   });
 
@@ -1140,10 +1227,7 @@ void main() {
     expect(contextField.controller!.text, 'gamma delta');
   });
 
-  testWidgets('RT-10: Phrase surface is contiguous cue substring', (
-    tester,
-  ) async {
-    // Comma between words must be kept (not space-join of surfaces only).
+  testWidgets('RT-10 / RT-14: Multi-token Add not available', (tester) async {
     const cueText = 'hello, world';
     pumpCues = [
       CueDto(
@@ -1164,12 +1248,20 @@ void main() {
 
     await tester.tap(find.byKey(const Key('readerAddVocabCta')));
     await tester.pumpAndSettle();
+    // Only the last single token — no contiguous phrase surface.
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerAddVocabSurface')),
+        matching: find.text('world'),
+      ),
+      findsOneWidget,
+    );
     expect(
       find.descendant(
         of: find.byKey(const Key('readerAddVocabSurface')),
         matching: find.text('hello, world'),
       ),
-      findsOneWidget,
+      findsNothing,
     );
   });
 
@@ -1196,9 +1288,12 @@ void main() {
     expect(find.text('Could not prepare word selection'), findsOneWidget);
   });
 
-  testWidgets('DE-13: Upsert from Reader same normalized key', (tester) async {
+  testWidgets('DE-13 / RH-06: Upsert from edit sheet by morph lemma', (
+    tester,
+  ) async {
     await dictionary.add(
       lemma: 'hello',
+      surfaceKey: 'hello',
       translation: 'old',
       context: 'old ctx',
     );
@@ -1215,20 +1310,21 @@ void main() {
     await pumpReader(tester);
     await tester.pumpAndSettle();
 
+    // in_vocab → edit sheet (no Add CTA).
     await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('readerAddVocabCta')));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('readerAddVocabCta')), findsNothing);
+    expect(find.byKey(const Key('readerEditVocabSheet')), findsOneWidget);
 
     await tester.enterText(
-      find.byKey(const Key('readerAddVocabTranslation')),
+      find.byKey(const Key('readerEditVocabTranslation')),
       'new tr',
     );
     await tester.enterText(
-      find.byKey(const Key('readerAddVocabContext')),
+      find.byKey(const Key('readerEditVocabContext')),
       'new ctx',
     );
-    await tester.tap(find.byKey(const Key('readerAddVocabSave')));
+    await tester.tap(find.byKey(const Key('readerEditVocabSave')));
     await tester.pumpAndSettle();
 
     final list = await dictionary.list();
@@ -1236,5 +1332,248 @@ void main() {
     expect(list.single.lemma, 'hello');
     expect(list.single.translation, 'new tr');
     expect(list.single.context, 'new ctx');
+  });
+
+  // --- reader/highlight (RH-*) ---
+
+  testWidgets('RH-01 / RH-02 / RH-09: Marked wordforms use lemmaHighlight', (
+    tester,
+  ) async {
+    await dictionary.add(
+      lemma: 'run',
+      surfaceKey: 'run',
+      translation: 'бежать',
+    );
+    final mark = _FakeMark();
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['running and other'],
+      ),
+    ];
+    pumpTokenize = _tokenizeWithMorphLemmas;
+    pumpMark = mark.call;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    expect(mark.callCount, greaterThanOrEqualTo(1));
+    expect(mark.lastVocabLemmas, contains('run'));
+
+    final highlight = ReaderColors.light.lemmaHighlight;
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_0')),
+      highlight,
+    );
+    // "and" / "other" stay default (no highlight fill).
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_1')),
+      isNot(highlight),
+    );
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_2')),
+      isNot(highlight),
+    );
+  });
+
+  testWidgets('RH-08: Phrase dict entries do not highlight tokens', (
+    tester,
+  ) async {
+    await dictionary.add(
+      lemma: 'hello world',
+      surfaceKey: 'hello world',
+      translation: 'привет мир',
+    );
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    final highlight = ReaderColors.light.lemmaHighlight;
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_0')),
+      isNot(highlight),
+    );
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_1')),
+      isNot(highlight),
+    );
+  });
+
+  testWidgets('RH-03: Refresh highlight after Add save', (tester) async {
+    final mark = _FakeMark();
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpMark = mark.call;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    final callsAfterOpen = mark.callCount;
+
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_0')),
+      isNot(ReaderColors.light.lemmaHighlight),
+    );
+
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('readerAddVocabCta')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('readerAddVocabTranslation')),
+      'привет',
+    );
+    await tester.tap(find.byKey(const Key('readerAddVocabSave')));
+    await tester.pumpAndSettle();
+
+    expect(mark.callCount, greaterThan(callsAfterOpen));
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_0')),
+      ReaderColors.light.lemmaHighlight,
+    );
+  });
+
+  testWidgets('RH-05 / RT-15: Tap in_vocab opens edit sheet, no Add CTA', (
+    tester,
+  ) async {
+    await dictionary.add(
+      lemma: 'hello',
+      surfaceKey: 'hello',
+      translation: 'привет',
+      context: 'ctx',
+    );
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerAddVocabCta')), findsNothing);
+    expect(find.byKey(const Key('readerEditVocabSheet')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerEditVocabLemma')),
+        matching: find.text('hello'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerEditVocabSurface')),
+        matching: find.text('hello'),
+      ),
+      findsOneWidget,
+    );
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('readerEditVocabTranslation')),
+    );
+    expect(translation.controller!.text, 'привет');
+  });
+
+  testWidgets('RH-04 / RH-07: Edit delete clears highlight via re-mark', (
+    tester,
+  ) async {
+    await dictionary.add(
+      lemma: 'hello',
+      surfaceKey: 'hello',
+      translation: 'привет',
+    );
+    final mark = _FakeMark();
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpMark = mark.call;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_0')),
+      ReaderColors.light.lemmaHighlight,
+    );
+
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('readerEditVocabDelete')));
+    await tester.pumpAndSettle();
+
+    expect(await dictionary.lookup('hello'), isNull);
+    expect(
+      _tokenBackground(tester, const Key('readerCueToken_0_0')),
+      isNot(ReaderColors.light.lemmaHighlight),
+    );
+    expect(mark.callCount, greaterThanOrEqualTo(2));
+  });
+
+  testWidgets('RH-12: Translation pane has no vocab highlight UX', (
+    tester,
+  ) async {
+    await dictionary.add(
+      lemma: 'hello',
+      surfaceKey: 'hello',
+      translation: 'привет',
+    );
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTranslationCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerTranslationCueList')),
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w.key is ValueKey<String> &&
+              (w.key! as ValueKey<String>).value.startsWith('readerCueToken_'),
+        ),
+      ),
+      findsNothing,
+    );
   });
 }

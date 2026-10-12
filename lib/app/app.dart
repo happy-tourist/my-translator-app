@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'package:my_translator_app/app/shell.dart';
+import 'package:my_translator_app/app/theme.dart';
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/database/database_provider.dart';
+import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
+import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
 
 /// Root app: opens Drift after FRB init, then shows product shell.
 class TranslationReaderApp extends StatefulWidget {
@@ -37,8 +40,23 @@ class _TranslationReaderAppState extends State<TranslationReaderApp> {
         _openError = null;
       });
     }
+    AppDatabase? opened;
     try {
       final db = await openAppDatabase();
+      opened = db;
+      // Post-open stub→morph migrate (schema 4 DDL already applied in onUpgrade).
+      // Soft-fail: do not block shell / conflate with Drift open failure; retry next launch.
+      try {
+        await DictionaryRepository(db).migrateStubKeysIfNeeded(
+          lemmaKeysForSurfaces: (surfaces) =>
+              rust_tokenize.lemmaKeysForSurfaces(surfaces: surfaces),
+        );
+      } catch (e, st) {
+        assert(() {
+          debugPrint('stub→morph migrate failed: $e\n$st');
+          return true;
+        }());
+      }
       if (!mounted) {
         await db.close();
         return;
@@ -49,6 +67,7 @@ class _TranslationReaderAppState extends State<TranslationReaderApp> {
         _openError = null;
       });
     } catch (e) {
+      await opened?.close();
       if (!mounted) return;
       setState(() {
         _openError = e;
@@ -61,7 +80,9 @@ class _TranslationReaderAppState extends State<TranslationReaderApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Translation Reader',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.system,
       home: _buildHome(),
     );
   }

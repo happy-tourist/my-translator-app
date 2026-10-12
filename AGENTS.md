@@ -26,40 +26,40 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Current vs target
 
-**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`). Rust: `rust/src/parse/` + `api/parse.rs` (плюс scaffold `process_text` / `add_numbers`, не home UI).
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **4**). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`). Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). Rust: `parse/` + `tokenize/` + `lemmatize/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI).
 
-**Ещё target:** tokenize / lemma highlight / word card / offline translate; Rust cue pairing for index-aligned split — следующие changes.
+**Ещё target:** phrase-span highlight / phrase Add; offline translate; Rust cue pairing for index-aligned split — следующие changes.
 
 ---
 
 ## What It Is Used For
 
-### Основные сценарии (target)
+### Основные сценарии
 
-1. **Чтение субтитров** — загрузка SRT / VTT / ASS(SSA); парсинг в Rust; построчное отображение в Flutter.
-2. **Изучение слов по тапу** — тап по слову или выделение фразы → перевод, лемма, «добавить в словарь».
-3. **Подсветка знакомых слов** — записи словаря подсвечиваются в тексте; матч по лемме (`run` / `running` / `ran` = одно слово).
-4. **Разделённый экран** — сверху оригинал, снизу файл перевода; sync по ближайшему `startMs` (MVP), позже — по индексу при pairing.
+1. **Чтение субтитров** (сейчас) — загрузка SRT / VTT / ASS(SSA); парсинг в Rust; построчное отображение в Flutter.
+2. **Изучение слов по тапу** (сейчас: single-token sheet; фраза — target) — тап по слову → лемма + «добавить/редактировать в словаре»; выделение фразы — later.
+3. **Подсветка знакомых слов** (сейчас) — записи словаря подсвечиваются в оригинале; матч по morph lemma (`run` / `running` / `ran` = одно слово).
+4. **Разделённый экран** (сейчас MVP) — сверху оригинал, снизу файл перевода; sync по ближайшему `startMs`, позже — по индексу при pairing.
 5. **Работа с ИИ** (опционально, позже) — перевод фраз, фразовые глаголы, контекст; разные провайдеры через API.
-6. **Офлайн-перевод** — базовый перевод слов/фраз без интернета.
+6. **Офлайн-перевод** (target) — базовый перевод слов/фраз без интернета.
 
-### Ключевые функции (target)
+### Ключевые функции
 
-- Парсинг субтитров: SRT, VTT, ASS/SSA
-- Токенизация + лемматизация (EN, RU и др.)
-- Личный словарь: переводы + контекст
-- Подсветка сохранённых слов с учётом морфологии
-- Тап → карточка перевода + «добавить в словарь»
-- Выделение фразы → перевод фразы целиком
+- Парсинг субтитров: SRT, VTT, ASS/SSA (сейчас)
+- Токенизация + EN WordNet лемматизация + mark (сейчас); RU morph — later
+- Личный словарь: переводы + контекст + `surface_key` (сейчас, Drift schema 4)
+- Подсветка сохранённых слов с учётом морфологии (сейчас, original pane)
+- Тап → bottom CTA + add/edit vocab sheet (сейчас); офлайн-карточка перевода — later
+- Выделение фразы → перевод фразы целиком (target)
 - Split view: оригинал + файл перевода, sync scroll (MVP: nearest `startMs`)
-- Опциональный ИИ для перевода/объяснений
+- Опциональный ИИ для перевода/объяснений (later)
 - Локальное хранение (папки/документы библиотеки, словарь, настройки later) — **Drift** в Flutter (`lib/`)
 - Работа офлайн
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD); cues-first Reader with split toggle / load-delete translation / time sync + reading-anchor resume; Drift schema v3 (`translationDocumentId`, `lastReadStartMs` / `lastReadAlignment`) + repositories (`attachTranslation` / `saveReadingAnchor` / `loadBytes` / content store)
-- Rust: `parse/` + FRB `parse_subtitles` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
+- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD); cues-first Reader with single-token tap→sheet, morph lemma highlight, split toggle / load-delete translation / time sync + reading-anchor resume; Drift schema v4 (`surface_key` on dictionary entries, stub→morph migration via `lemmaKeysForSurfaces`) + repositories (`attachTranslation` / `saveReadingAnchor` / `loadBytes` / content store)
+- Rust: `parse/` + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + FRB `parse_subtitles` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold)
 
 ---
@@ -122,9 +122,9 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 
 ### UX areas
 
-**Сейчас:** Library (папки / import / open + linked translation restore), cues-first Reader (таймкоды + текст, optional horizontal split + sync), Vocab CRUD.
+**Сейчас:** Library (папки / import / open + linked translation restore), cues-first Reader (таймкоды + текст, single-token tap→vocab sheet, morph lemma highlight on original pane, optional horizontal split + sync), Vocab CRUD.
 
-**Target (later):** тап/выделение + подсветка по лемме, карточка слова/фразы, index-aligned paired split, настройки (языки, опциональный ИИ).
+**Target (later):** phrase multi-token highlight/Add, offline word card gloss, index-aligned paired split, настройки (языки, опциональный ИИ).
 
 Роутера и state-management пакетов (Provider/Riverpod/Bloc) пока нет — `Navigator` + screen state.
 
@@ -153,7 +153,7 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 | Парсер SRT/VTT/ASS | Rust (`rust/src/…`), тонкий FFI в `api/` |
 | Токенизация / лемматизация / матч словоформ | Rust |
 | Библиотека папок / документов (`library/folders`, `library/documents`) | Drift в `lib/` |
-| Словарь CRUD + контекст (`dictionary/entries`) | Drift в `lib/` (persist); NLP lemma keys — Rust when compute lands |
+| Словарь CRUD + контекст (`dictionary/entries`) | Drift в `lib/` (persist); morph lemma keys — Rust FRB (`lemma_keys_for_surfaces` / `TokenDto.lemma_key`) |
 | Офлайн-перевод слов/фраз | Rust |
 | Подсветка / разметка токенов для UI | Rust готовит данные; Flutter рисует |
 | Экраны library / vocab / reader / split | `lib/` |
@@ -191,12 +191,13 @@ Package managers: pub (Dart), Cargo (`rust/`).
 
 Rust:
 
-1. `rust/src/lib.rs` — `mod parse` + `api` + `frb_generated`
-2. `rust/src/api/mod.rs` — `simple`, `parse`, …
+1. `rust/src/lib.rs` — `mod parse` + `tokenize` + `lemmatize` + `api` + `frb_generated`
+2. `rust/src/api/mod.rs` — `simple`, `parse`, `tokenize`, …
 3. `rust/src/parse/` — subtitle parse core; `api/parse.rs` — тонкий FRB
-4. `rust/src/api/simple.rs` — scaffold demo (не product home)
+4. `rust/src/tokenize/` + `lemmatize/` — panko spans + EN WordNet morph keys; thin exports on `api/tokenize.rs`
+5. `rust/src/api/simple.rs` — scaffold demo (не product home)
 
-Дальше: lemma / translate вне `api/` + тонкий экспорт. User DB — не в Rust.
+Дальше: offline translate вне `api/` + тонкий экспорт. User DB — не в Rust.
 
 ---
 
@@ -227,6 +228,8 @@ my_translator_app/
 │   └── src/
 │       ├── lib.rs
 │       ├── parse/            ← subtitle parse core
+│       ├── tokenize/         ← panko word spans
+│       ├── lemmatize/        ← EN WordNet morph keys + mark helpers
 │       ├── api/              ← публичный FFI API (compute)
 │       └── frb_generated.rs  ← GENERATED
 ├── rust_builder/             ← glue / cargokit
@@ -261,17 +264,19 @@ lib/**  (Flutter UI + Drift data layer)
 | Dart (generated) | Rust | Сейчас |
 |------------------|------|--------|
 | `parseSubtitles(bytes:, formatHint:)` | `api::parse::parse_subtitles` | SRT/VTT/ASS → cues + `ParseErrorKind` |
+| `tokenizeCues(texts:)` | `api::tokenize::tokenize_cues` | word tokens + char spans + `lemma_key` (`is_in_vocab=false`) |
+| `markVocabTokens(cues:, vocabLemmas:)` | `api::tokenize::mark_vocab_tokens` | sets `is_in_vocab` from morph lemma set |
+| `lemmaKeysForSurfaces(surfaces:)` | `api::tokenize::lemma_keys_for_surfaces` | surface→morph key (Vocab / stub→morph migration) |
 | `processText(input:)` | `process_text` | scaffold demo `to_uppercase` |
 | `addNumbers(a:, b:)` | `add_numbers` | scaffold demo `a + b` |
 | `RustLib.init()` | `init_app` | `setup_default_user_utils()` |
 
 ### Ожидаемые области API (target, ещё нет)
 
-- tokenize / lemmatize → токены + леммы для подсветки и тапа
 - translate word/phrase (offline)
 - (позже) optional AI explain/translate
 
-Dictionary / library CRUD — **не** FRB storage API: persist через Drift в `lib/`. Lookup-by-lemma для highlight later может читать Drift на Flutter или передавать set лемм в Rust compute — отдельный change.
+Dictionary / library CRUD — **не** FRB storage API: persist через Drift в `lib/`. Highlight membership: Flutter loads morph lemmas from Drift and passes them to `markVocabTokens`.
 
 Менять compute-контракт только через Rust `api/` + codegen + обновление UI и тестов.
 

@@ -31,10 +31,13 @@ class Documents extends Table {
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
 }
 
-/// Personal vocabulary (`dictionary/entries`). [lemma] is normalized unique key.
+/// Personal vocabulary (`dictionary/entries`).
+/// [lemma] = morph identity (UNIQUE); [surfaceKey] = casefold surface / legacy stub.
 class DictionaryEntries extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get lemma => text().unique()();
+  /// Casefold surface / legacy stub key (not unique). Null until stub→morph migrate.
+  TextColumn get surfaceKey => text().nullable()();
   TextColumn get translation => text()();
   TextColumn get context => text().nullable()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();

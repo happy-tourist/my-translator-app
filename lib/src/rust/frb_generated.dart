@@ -71,7 +71,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1267278839;
+  int get rustContentHash => 1131912890;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -86,6 +86,15 @@ abstract class RustLibApi extends BaseApi {
   Future<int> crateApiSimpleAddNumbers({required int a, required int b});
 
   Future<void> crateApiSimpleInitApp();
+
+  Future<List<String>> crateApiTokenizeLemmaKeysForSurfaces({
+    required List<String> surfaces,
+  });
+
+  Future<List<CueTokensDto>> crateApiTokenizeMarkVocabTokens({
+    required List<CueTokensDto> cues,
+    required List<String> vocabLemmas,
+  });
 
   Future<ParsedSubtitles> crateApiParseParseSubtitles({
     required List<int> bytes,
@@ -164,6 +173,74 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  Future<List<String>> crateApiTokenizeLemmaKeysForSurfaces({
+    required List<String> surfaces,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_String(surfaces, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTokenizeLemmaKeysForSurfacesConstMeta,
+        argValues: [surfaces],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTokenizeLemmaKeysForSurfacesConstMeta =>
+      const TaskConstMeta(
+        debugName: "lemma_keys_for_surfaces",
+        argNames: ["surfaces"],
+      );
+
+  @override
+  Future<List<CueTokensDto>> crateApiTokenizeMarkVocabTokens({
+    required List<CueTokensDto> cues,
+    required List<String> vocabLemmas,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_cue_tokens_dto(cues, serializer);
+          sse_encode_list_String(vocabLemmas, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_cue_tokens_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTokenizeMarkVocabTokensConstMeta,
+        argValues: [cues, vocabLemmas],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTokenizeMarkVocabTokensConstMeta =>
+      const TaskConstMeta(
+        debugName: "mark_vocab_tokens",
+        argNames: ["cues", "vocabLemmas"],
+      );
+
+  @override
   Future<ParsedSubtitles> crateApiParseParseSubtitles({
     required List<int> bytes,
     String? formatHint,
@@ -177,7 +254,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 5,
             port: port_,
           );
         },
@@ -208,7 +285,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 6,
             port: port_,
           );
         },
@@ -238,7 +315,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 7,
             port: port_,
           );
         },
@@ -260,6 +337,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as String;
+  }
+
+  @protected
+  bool dco_decode_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as bool;
   }
 
   @protected
@@ -358,13 +441,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TokenDto dco_decode_token_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return TokenDto(
       surface: dco_decode_String(arr[0]),
       charStart: dco_decode_u_32(arr[1]),
       charEnd: dco_decode_u_32(arr[2]),
       tokenIndex: dco_decode_u_32(arr[3]),
+      lemmaKey: dco_decode_String(arr[4]),
+      isInVocab: dco_decode_bool(arr[5]),
     );
   }
 
@@ -397,6 +482,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
+  }
+
+  @protected
+  bool sse_decode_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint8() != 0;
   }
 
   @protected
@@ -525,11 +616,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_charStart = sse_decode_u_32(deserializer);
     var var_charEnd = sse_decode_u_32(deserializer);
     var var_tokenIndex = sse_decode_u_32(deserializer);
+    var var_lemmaKey = sse_decode_String(deserializer);
+    var var_isInVocab = sse_decode_bool(deserializer);
     return TokenDto(
       surface: var_surface,
       charStart: var_charStart,
       charEnd: var_charEnd,
       tokenIndex: var_tokenIndex,
+      lemmaKey: var_lemmaKey,
+      isInVocab: var_isInVocab,
     );
   }
 
@@ -557,15 +652,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  bool sse_decode_bool(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getUint8() != 0;
-  }
-
-  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
+  }
+
+  @protected
+  void sse_encode_bool(bool self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint8(self ? 1 : 0);
   }
 
   @protected
@@ -690,6 +785,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.charStart, serializer);
     sse_encode_u_32(self.charEnd, serializer);
     sse_encode_u_32(self.tokenIndex, serializer);
+    sse_encode_String(self.lemmaKey, serializer);
+    sse_encode_bool(self.isInVocab, serializer);
   }
 
   @protected
@@ -713,11 +810,5 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-  }
-
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putUint8(self ? 1 : 0);
   }
 }

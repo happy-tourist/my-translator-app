@@ -3,12 +3,21 @@ import 'package:flutter/material.dart';
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_exceptions.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
+import 'package:my_translator_app/data/dictionary/lemma_keys_for_surfaces_fn.dart';
+import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
 
-/// Minimal vocabulary UI: empty add form, list, delete (design D8).
+/// Minimal vocabulary UI: empty add form, list, delete (design D8 / D5.1).
 class VocabularyScreen extends StatefulWidget {
-  const VocabularyScreen({super.key, required this.dictionaryRepository});
+  const VocabularyScreen({
+    super.key,
+    required this.dictionaryRepository,
+    this.lemmaKeysForSurfaces,
+  });
 
   final DictionaryRepository dictionaryRepository;
+
+  /// Morph keys for manual add. Defaults to generated FRB.
+  final LemmaKeysForSurfacesFn? lemmaKeysForSurfaces;
 
   @override
   State<VocabularyScreen> createState() => _VocabularyScreenState();
@@ -23,6 +32,10 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
   var _loading = true;
   String? _listError;
   String? _formError;
+
+  LemmaKeysForSurfacesFn get _lemmaKeysForSurfaces =>
+      widget.lemmaKeysForSurfaces ??
+      ((surfaces) => rust_tokenize.lemmaKeysForSurfaces(surfaces: surfaces));
 
   @override
   void initState() {
@@ -62,11 +75,17 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
   Future<void> _addEntry() async {
     setState(() => _formError = null);
     try {
+      final input = _lemmaController.text;
+      final keys = await _lemmaKeysForSurfaces([input]);
+      if (!mounted) return;
+      final morph = keys.isEmpty ? '' : keys.first;
       await widget.dictionaryRepository.add(
-        lemma: _lemmaController.text,
+        lemma: morph,
+        surfaceKey: DictionaryRepository.normalizeSurface(input),
         translation: _translationController.text,
         context: _contextController.text,
       );
+      if (!mounted) return;
       _lemmaController.clear();
       _translationController.clear();
       _contextController.clear();

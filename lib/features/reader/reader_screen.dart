@@ -7,6 +7,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show AnyhowException, PanicException;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_exceptions.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
 import 'package:my_translator_app/data/library/document_format.dart';
@@ -14,7 +15,6 @@ import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
-import 'package:my_translator_app/features/reader/cue_char_slice.dart';
 import 'package:my_translator_app/features/reader/cue_row.dart';
 import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
@@ -45,6 +45,7 @@ class ReaderScreen extends StatefulWidget {
     this.initialReadingAnchor,
     this.parseSubtitles,
     this.tokenizeCues,
+    this.markVocabTokens,
     this.filePicker,
   });
 
@@ -65,6 +66,9 @@ class ReaderScreen extends StatefulWidget {
   /// Defaults to generated FRB [rust_tokenize.tokenizeCues].
   final TokenizeCuesFn? tokenizeCues;
 
+  /// Defaults to generated FRB [rust_tokenize.markVocabTokens].
+  final MarkVocabTokensFn? markVocabTokens;
+
   /// Defaults to [FilePicker.pickFiles].
   final ReaderTranslationPicker? filePicker;
 
@@ -76,7 +80,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   static const double _dividerHandleHeight = 16;
   static const double _minRatio = 0.2;
   static const double _maxRatio = 0.8;
-  static const Duration _gapFlashDuration = Duration(milliseconds: 300);
 
   var _splitEnabled = false;
   var _dividerRatio = 0.5;
@@ -88,16 +91,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
 
-  /// Batch tokenize cache (D4). Null while in-flight or after failure.
+  /// Batch tokenize+mark cache (D5). Null while in-flight or after failure.
   List<rust_tokenize.CueTokensDto>? _cueTokensByIndex;
   var _tokenizeReady = false;
 
-  /// Selection: active cue + inclusive token range (D5). Null = empty.
+  /// Single-token Add selection (D5). Null = empty.
   int? _activeCueIndex;
-  int? _selectionStart;
-  int? _selectionEnd;
-  int? _flashTokenIndex;
-  Timer? _flashTimer;
+  int? _selectedTokenIndex;
 
   final _originalScrollController = ItemScrollController();
   final _translationScrollController = ItemScrollController();
@@ -111,6 +111,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
       widget.tokenizeCues ??
       ((texts) => rust_tokenize.tokenizeCues(texts: texts));
 
+  MarkVocabTokensFn get _mark =>
+      widget.markVocabTokens ??
+      (({required cues, required vocabLemmas}) =>
+          rust_tokenize.markVocabTokens(cues: cues, vocabLemmas: vocabLemmas));
+
   bool get _hasTranslationCues =>
       _translationCues != null && _translationCues!.isNotEmpty;
 
@@ -118,9 +123,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool get _hasLinkedTranslation => _translationDocumentId != null;
 
   bool get _hasSelection =>
-      _activeCueIndex != null &&
-      _selectionStart != null &&
-      _selectionEnd != null;
+      _activeCueIndex != null && _selectedTokenIndex != null;
 
   @override
   void initState() {
@@ -135,11 +138,30 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   void dispose() {
-    _flashTimer?.cancel();
     // RS-12 / D10: best-effort save on pop/dispose (do not block).
     // Force: skip `_syncing` guard — pop must still persist even mid-sync.
     unawaited(_persistReadingAnchor(force: true));
     super.dispose();
+  }
+
+  List<rust_tokenize.CueTokensDto> _normalizeCueTokensCache(
+    List<rust_tokenize.CueTokensDto> result,
+    int length,
+  ) {
+    final byIndex = List<rust_tokenize.CueTokensDto?>.filled(length, null);
+    for (final dto in result) {
+      if (dto.cueIndex >= 0 && dto.cueIndex < byIndex.length) {
+        byIndex[dto.cueIndex] = dto;
+      }
+    }
+    final cached = <rust_tokenize.CueTokensDto>[];
+    for (var i = 0; i < byIndex.length; i++) {
+      cached.add(
+        byIndex[i] ??
+            rust_tokenize.CueTokensDto(cueIndex: i, tokens: const []),
+      );
+    }
+    return cached;
   }
 
   Future<void> _runBatchTokenize() async {
@@ -149,27 +171,33 @@ class _ReaderScreenState extends State<ReaderScreen> {
     try {
       final result = await _tokenize(texts);
       if (!mounted) return;
-      // Normalize to list indexed by cue position (same order as input).
-      final byIndex = List<rust_tokenize.CueTokensDto?>.filled(
-        texts.length,
-        null,
-      );
-      for (final dto in result) {
-        if (dto.cueIndex >= 0 && dto.cueIndex < byIndex.length) {
-          byIndex[dto.cueIndex] = dto;
-        }
+      final cached = _normalizeCueTokensCache(result, texts.length);
+      // Mark failure must not wipe a successful tokenize (tap still works;
+      // highlights refresh on next save/open).
+      try {
+        final lemmas = (await widget.dictionaryRepository.list())
+            .map((e) => e.lemma)
+            .toList(growable: false);
+        if (!mounted) return;
+        final marked = await _mark(cues: cached, vocabLemmas: lemmas);
+        if (!mounted) return;
+        setState(() {
+          _cueTokensByIndex =
+              _normalizeCueTokensCache(marked, texts.length);
+          _tokenizeReady = true;
+        });
+      } catch (e, st) {
+        assert(() {
+          debugPrint('markVocabTokens on open failed: $e\n$st');
+          return true;
+        }());
+        if (!mounted) return;
+        setState(() {
+          _cueTokensByIndex = cached;
+          _tokenizeReady = true;
+        });
+        _showMarkRefreshError();
       }
-      final cached = <rust_tokenize.CueTokensDto>[];
-      for (var i = 0; i < byIndex.length; i++) {
-        cached.add(
-          byIndex[i] ??
-              rust_tokenize.CueTokensDto(cueIndex: i, tokens: const []),
-        );
-      }
-      setState(() {
-        _cueTokensByIndex = cached;
-        _tokenizeReady = true;
-      });
     } on AnyhowException catch (e) {
       assert(() {
         debugPrint('tokenizeCues Anyhow: ${e.message}');
@@ -188,6 +216,30 @@ class _ReaderScreenState extends State<ReaderScreen> {
         return true;
       }());
       _failTokenizeBatch();
+    }
+  }
+
+  /// Re-read Drift morph lemmas → markVocabTokens on live cache (D5 / RH-03/04).
+  Future<void> _refreshVocabMarks() async {
+    final cache = _cueTokensByIndex;
+    if (cache == null || !_tokenizeReady) return;
+    try {
+      final lemmas = (await widget.dictionaryRepository.list())
+          .map((e) => e.lemma)
+          .toList(growable: false);
+      if (!mounted) return;
+      final marked = await _mark(cues: cache, vocabLemmas: lemmas);
+      if (!mounted) return;
+      setState(() {
+        _cueTokensByIndex =
+            _normalizeCueTokensCache(marked, cache.length);
+      });
+    } catch (e, st) {
+      assert(() {
+        debugPrint('markVocabTokens refresh failed: $e\n$st');
+        return true;
+      }());
+      _showMarkRefreshError();
     }
   }
 
@@ -212,23 +264,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  void _clearSelection({bool updateState = true}) {
-    _flashTimer?.cancel();
-    _flashTimer = null;
-    _activeCueIndex = null;
-    _selectionStart = null;
-    _selectionEnd = null;
-    _flashTokenIndex = null;
-    if (updateState && mounted) setState(() {});
+  void _showMarkRefreshError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        key: Key('readerMarkRefreshErrorSnack'),
+        content: Text('Could not refresh vocabulary highlights'),
+      ),
+    );
   }
 
-  void _startFlash(int tokenIndex) {
-    _flashTimer?.cancel();
-    _flashTokenIndex = tokenIndex;
-    _flashTimer = Timer(_gapFlashDuration, () {
-      if (!mounted) return;
-      setState(() => _flashTokenIndex = null);
-    });
+  void _clearSelection({bool updateState = true}) {
+    _activeCueIndex = null;
+    _selectedTokenIndex = null;
+    if (updateState && mounted) setState(() {});
   }
 
   void _onOriginalTokenTap(int cueIndex, int tokenIndex) {
@@ -237,79 +286,34 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final tokens = _cueTokensByIndex![cueIndex].tokens;
     if (tokenIndex < 0 || tokenIndex >= tokens.length) return;
 
+    final token = tokens[tokenIndex];
+    // in_vocab → clear Add selection → edit sheet (no CTA).
+    if (token.isInVocab) {
+      _clearSelection();
+      unawaited(_openEditVocabSheet(cueIndex: cueIndex, token: token));
+      return;
+    }
+
+    // Retap same non-vocab single → no-op.
+    if (_activeCueIndex == cueIndex && _selectedTokenIndex == tokenIndex) {
+      return;
+    }
+
+    // Empty / other non-vocab → select that single token + CTA.
     setState(() {
-      void clearFlash() {
-        _flashTimer?.cancel();
-        _flashTimer = null;
-        _flashTokenIndex = null;
-      }
-
-      // Other cue → clear previous, start new anchor (no gap-flash).
-      if (_activeCueIndex != null && _activeCueIndex != cueIndex) {
-        clearFlash();
-        _activeCueIndex = cueIndex;
-        _selectionStart = tokenIndex;
-        _selectionEnd = tokenIndex;
-        return;
-      }
-
       _activeCueIndex = cueIndex;
-      final start = _selectionStart;
-      final end = _selectionEnd;
-
-      // Empty → select [T,T].
-      if (start == null || end == null) {
-        clearFlash();
-        _selectionStart = tokenIndex;
-        _selectionEnd = tokenIndex;
-        return;
-      }
-
-      final t = tokenIndex;
-      // Expand adjacent.
-      if (t == start - 1 || t == end + 1) {
-        clearFlash();
-        _selectionStart = t < start ? t : start;
-        _selectionEnd = t > end ? t : end;
-        return;
-      }
-
-      // Inside multi-word range → shrink to [T,T].
-      if (t >= start && t <= end && (end - start) >= 1) {
-        clearFlash();
-        _selectionStart = t;
-        _selectionEnd = t;
-        return;
-      }
-
-      // Single selected word tapped again → no-op.
-      if (t == start && t == end) {
-        return;
-      }
-
-      // Gap → reset to [T,T] + flash.
-      _selectionStart = t;
-      _selectionEnd = t;
-      _startFlash(t);
+      _selectedTokenIndex = tokenIndex;
     });
   }
 
-  /// Contiguous cue substring for selection (RT-10).
-  String? _selectedPhraseSurface() {
+  rust_tokenize.TokenDto? _selectedToken() {
     if (!_hasSelection || _cueTokensByIndex == null) return null;
     final cueIndex = _activeCueIndex!;
-    if (cueIndex < 0 || cueIndex >= widget.originalCues.length) return null;
-    final cueText = widget.originalCues[cueIndex].textLines.join('\n');
+    final tokenIndex = _selectedTokenIndex!;
+    if (cueIndex < 0 || cueIndex >= _cueTokensByIndex!.length) return null;
     final tokens = _cueTokensByIndex![cueIndex].tokens;
-    final start = _selectionStart!;
-    final end = _selectionEnd!;
-    if (start > end) return null;
-    // Batch tokens are dense 0..n-1 in order (api TokenDto.token_index).
-    if (start < 0 || end >= tokens.length) return null;
-    final startTok = tokens[start];
-    final endTok = tokens[end];
-    // DTO char spans are Unicode scalars (design D2), not UTF-16 code units.
-    return cueCharSlice(cueText, startTok.charStart, endTok.charEnd);
+    if (tokenIndex < 0 || tokenIndex >= tokens.length) return null;
+    return tokens[tokenIndex];
   }
 
   String? _activeCueText() {
@@ -320,16 +324,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _openAddVocabSheet() async {
-    final phrase = _selectedPhraseSurface();
+    final token = _selectedToken();
     final cueText = _activeCueText();
-    if (phrase == null || phrase.isEmpty || cueText == null) return;
+    if (token == null || cueText == null) return;
+    final surface = token.surface;
+    if (surface.isEmpty) return;
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (sheetContext) {
         return _AddVocabSheet(
-          surface: phrase,
+          surface: surface,
+          lemmaKey: token.lemmaKey,
           initialContext: cueText,
           dictionaryRepository: widget.dictionaryRepository,
         );
@@ -338,8 +345,52 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
     if (!mounted) return;
     if (saved == true) {
-      // D6: close sheet (done); clear selection; no lemma highlight refresh.
       _clearSelection();
+      await _refreshVocabMarks();
+    }
+  }
+
+  Future<void> _openEditVocabSheet({
+    required int cueIndex,
+    required rust_tokenize.TokenDto token,
+  }) async {
+    final entry = await widget.dictionaryRepository.lookup(token.lemmaKey);
+    if (!mounted) return;
+    if (entry == null) {
+      // Stale flag / race — fall back to Add selection on the tapped cue.
+      setState(() {
+        final cache = _cueTokensByIndex;
+        if (cache == null ||
+            cueIndex < 0 ||
+            cueIndex >= cache.length) {
+          return;
+        }
+        final tokens = cache[cueIndex].tokens;
+        if (token.tokenIndex < 0 ||
+            token.tokenIndex >= tokens.length) {
+          return;
+        }
+        _activeCueIndex = cueIndex;
+        _selectedTokenIndex = token.tokenIndex;
+      });
+      return;
+    }
+
+    final changed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return _EditVocabSheet(
+          entry: entry,
+          surface: token.surface,
+          dictionaryRepository: widget.dictionaryRepository,
+        );
+      },
+    );
+
+    if (!mounted) return;
+    if (changed == true) {
+      await _refreshVocabMarks();
     }
   }
 
@@ -698,7 +749,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _buildAddVocabCta() {
-    final phrase = _selectedPhraseSurface();
+    final token = _selectedToken();
+    final surface = token?.surface;
     return Material(
       elevation: 8,
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
@@ -709,7 +761,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             width: double.infinity,
             child: FilledButton(
               key: const Key('readerAddVocabCta'),
-              onPressed: phrase == null || phrase.isEmpty
+              onPressed: surface == null || surface.isEmpty
                   ? null
                   : _openAddVocabSheet,
               child: const Text('Add to vocabulary'),
@@ -921,9 +973,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
             keyPrefix: keyPrefix,
             cueListIndex: fromOriginal ? index : null,
             tokens: tokens,
-            selectionStart: isActive ? _selectionStart : null,
-            selectionEnd: isActive ? _selectionEnd : null,
-            flashTokenIndex: isActive ? _flashTokenIndex : null,
+            selectionStart: isActive ? _selectedTokenIndex : null,
+            selectionEnd: isActive ? _selectedTokenIndex : null,
             onTokenTap: tokensReady && tokens != null && tokens.isNotEmpty
                 ? (tokenIndex) => _onOriginalTokenTap(index, tokenIndex)
                 : null,
@@ -934,15 +985,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 }
 
-/// Bottom sheet to add Reader selection to vocabulary (D6 / RT-05…RT-07).
+/// Bottom sheet to add Reader single-token selection (D5 / RT-05…RT-07).
 class _AddVocabSheet extends StatefulWidget {
   const _AddVocabSheet({
     required this.surface,
+    required this.lemmaKey,
     required this.initialContext,
     required this.dictionaryRepository,
   });
 
   final String surface;
+  final String lemmaKey;
   final String initialContext;
   final DictionaryRepository dictionaryRepository;
 
@@ -972,7 +1025,7 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
 
   Future<void> _onSave() async {
     final trimmedTranslation = _translationController.text.trim();
-    // RT-07 / D6: empty translation → validation error, no persist.
+    // RT-07 / D5: empty translation → validation error, no persist.
     if (trimmedTranslation.isEmpty) {
       setState(() {
         _validationError = 'Translation must not be empty';
@@ -987,7 +1040,8 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
 
     try {
       await widget.dictionaryRepository.add(
-        lemma: widget.surface,
+        lemma: widget.lemmaKey,
+        surfaceKey: DictionaryRepository.normalizeSurface(widget.surface),
         translation: trimmedTranslation,
         context: _contextController.text,
       );
@@ -1034,7 +1088,7 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
             InputDecorator(
               key: const Key('readerAddVocabSurface'),
               decoration: const InputDecoration(
-                labelText: 'Word / phrase',
+                labelText: 'Word',
                 border: OutlineInputBorder(),
               ),
               child: Text(widget.surface),
@@ -1082,6 +1136,208 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Edit sheet for in-vocab token tap (D5 / RH-05…RH-07).
+class _EditVocabSheet extends StatefulWidget {
+  const _EditVocabSheet({
+    required this.entry,
+    required this.surface,
+    required this.dictionaryRepository,
+  });
+
+  final DictionaryEntry entry;
+  final String surface;
+  final DictionaryRepository dictionaryRepository;
+
+  @override
+  State<_EditVocabSheet> createState() => _EditVocabSheetState();
+}
+
+class _EditVocabSheetState extends State<_EditVocabSheet> {
+  late final TextEditingController _translationController;
+  late final TextEditingController _contextController;
+  String? _validationError;
+  var _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _translationController =
+        TextEditingController(text: widget.entry.translation);
+    _contextController =
+        TextEditingController(text: widget.entry.context ?? '');
+  }
+
+  @override
+  void dispose() {
+    _translationController.dispose();
+    _contextController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onSave() async {
+    final trimmedTranslation = _translationController.text.trim();
+    if (trimmedTranslation.isEmpty) {
+      setState(() {
+        _validationError = 'Translation must not be empty';
+      });
+      return;
+    }
+
+    setState(() {
+      _validationError = null;
+      _busy = true;
+    });
+
+    try {
+      await widget.dictionaryRepository.add(
+        lemma: widget.entry.lemma,
+        surfaceKey: widget.entry.surfaceKey ??
+            DictionaryRepository.normalizeSurface(widget.surface),
+        translation: trimmedTranslation,
+        context: _contextController.text,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on DictionaryValidationException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _validationError = e.message;
+      });
+    } catch (e, st) {
+      assert(() {
+        debugPrint('dict edit from Reader: $e\n$st');
+        return true;
+      }());
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't save. Try again.")),
+      );
+    }
+  }
+
+  Future<void> _onDelete() async {
+    setState(() {
+      _validationError = null;
+      _busy = true;
+    });
+    try {
+      await widget.dictionaryRepository.remove(widget.entry.id);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on DictionaryValidationException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _validationError = e.message;
+      });
+    } catch (e, st) {
+      assert(() {
+        debugPrint('dict delete from Reader: $e\n$st');
+        return true;
+      }());
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't delete. Try again.")),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final theme = Theme.of(context);
+
+    return Padding(
+      key: const Key('readerEditVocabSheet'),
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Edit vocabulary',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            InputDecorator(
+              key: const Key('readerEditVocabLemma'),
+              decoration: const InputDecoration(
+                labelText: 'Lemma',
+                border: OutlineInputBorder(),
+              ),
+              child: Text(widget.entry.lemma),
+            ),
+            const SizedBox(height: 12),
+            InputDecorator(
+              key: const Key('readerEditVocabSurface'),
+              decoration: const InputDecoration(
+                labelText: 'Surface',
+                border: OutlineInputBorder(),
+              ),
+              child: Text(widget.surface),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('readerEditVocabTranslation'),
+              controller: _translationController,
+              decoration: const InputDecoration(
+                labelText: 'Translation',
+                border: OutlineInputBorder(),
+              ),
+              textInputAction: TextInputAction.next,
+              enabled: !_busy,
+              autofocus: true,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('readerEditVocabContext'),
+              controller: _contextController,
+              decoration: const InputDecoration(
+                labelText: 'Context',
+                border: OutlineInputBorder(),
+              ),
+              minLines: 2,
+              maxLines: 4,
+              enabled: !_busy,
+            ),
+            if (_validationError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _validationError!,
+                key: const Key('readerEditVocabValidationError'),
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              key: const Key('readerEditVocabSave'),
+              onPressed: _busy ? null : _onSave,
+              child: _busy
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton(
+              key: const Key('readerEditVocabDelete'),
+              onPressed: _busy ? null : _onDelete,
+              child: const Text('Delete'),
             ),
           ],
         ),

@@ -19,6 +19,12 @@ Future<List<CueTokensDto>> _emptyTokenize(List<String> texts) async => [
         CueTokensDto(cueIndex: i, tokens: const []),
     ];
 
+Future<List<CueTokensDto>> _identityMark({
+  required List<CueTokensDto> cues,
+  required List<String> vocabLemmas,
+}) async =>
+    cues;
+
 Uint8List _srtBytes([String text = 'Hi']) =>
     Uint8List.fromList(utf8.encode('1\n00:00:01,000 --> 00:00:02,000\n$text\n'));
 
@@ -62,6 +68,7 @@ void main() {
     LibraryFilePicker? filePicker,
     ParseSubtitlesFn? parseSubtitles,
     TokenizeCuesFn? tokenizeCues,
+    MarkVocabTokensFn? markVocabTokens,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -72,6 +79,7 @@ void main() {
           filePicker: filePicker,
           parseSubtitles: parseSubtitles,
           tokenizeCues: tokenizeCues ?? _emptyTokenize,
+          markVocabTokens: markVocabTokens ?? _identityMark,
         ),
       ),
     );
@@ -95,6 +103,7 @@ void main() {
           documentRepository: documents,
           dictionaryRepository: dictionary,
           tokenizeCues: _emptyTokenize,
+          markVocabTokens: _identityMark,
         ),
       ),
     );

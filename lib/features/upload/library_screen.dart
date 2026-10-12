@@ -39,6 +39,7 @@ class LibraryScreen extends StatefulWidget {
     this.filePicker,
     this.parseSubtitles,
     this.tokenizeCues,
+    this.markVocabTokens,
   });
 
   final FolderRepository folderRepository;
@@ -51,6 +52,9 @@ class LibraryScreen extends StatefulWidget {
 
   /// Passed through to [ReaderScreen] (test seam; defaults to FRB there).
   final TokenizeCuesFn? tokenizeCues;
+
+  /// Passed through to [ReaderScreen] (test seam; defaults to FRB there).
+  final MarkVocabTokensFn? markVocabTokens;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -307,6 +311,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             initialReadingAnchor: initialReadingAnchor,
             parseSubtitles: widget.parseSubtitles,
             tokenizeCues: widget.tokenizeCues,
+            markVocabTokens: widget.markVocabTokens,
           ),
         ),
       );

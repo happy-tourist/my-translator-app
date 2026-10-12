@@ -13,7 +13,7 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.connect() => AppDatabase(_openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -27,6 +27,13 @@ class AppDatabase extends _$AppDatabase {
       if (from < 3) {
         await migrator.addColumn(documents, documents.lastReadStartMs);
         await migrator.addColumn(documents, documents.lastReadAlignment);
+      }
+      // Schema 4: DDL only — morph rewrite is post-open migrateStubKeysIfNeeded.
+      if (from < 4) {
+        await migrator.addColumn(
+          dictionaryEntries,
+          dictionaryEntries.surfaceKey,
+        );
       }
     },
   );

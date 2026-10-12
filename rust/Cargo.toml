@@ -10,6 +10,7 @@ crate-type = ["cdylib", "staticlib"]
 flutter_rust_bridge = "=2.13.0"
 fasrt = "=0.5.0"
 panko = "0.2.0"
+wordnet-lemmatizer = { version = "0.1", default-features = false }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

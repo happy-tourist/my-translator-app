@@ -731,6 +731,7 @@ dependencies = [
  "fasrt",
  "flutter_rust_bridge",
  "panko",
+ "wordnet-lemmatizer",
 ]
 
 [[package]]
@@ -1003,6 +1004,12 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "wordnet-lemmatizer"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "665d1d6d46d3e76785cf018b30103388fa62a4289b236b04326a832d038d4339"
 
 [[package]]
 name = "zmij"

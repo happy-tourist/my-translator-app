@@ -64,6 +64,7 @@ void main() {
     final dictionary1 = DictionaryRepository(db1);
     await dictionary1.add(
       lemma: 'Run',
+      surfaceKey: 'Run',
       translation: 'бежать',
       context: 'He was running',
     );

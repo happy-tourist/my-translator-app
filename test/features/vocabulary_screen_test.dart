@@ -5,6 +5,19 @@ import 'package:my_translator_app/features/vocab/vocabulary_screen.dart';
 
 import '../support/test_database.dart';
 
+/// Identity morph for widget tests (no RustLib): casefold only.
+Future<List<String>> _identityLemmaKeys(List<String> surfaces) async =>
+    surfaces.map((s) => s.trim().toLowerCase()).toList();
+
+/// Fake morph: running → run (covers Vocab FRB seam wiring).
+Future<List<String>> _morphLemmaKeys(List<String> surfaces) async {
+  return surfaces.map((s) {
+    final lower = s.trim().toLowerCase();
+    if (lower == 'running') return 'run';
+    return lower;
+  }).toList();
+}
+
 void main() {
   late final db = createTestDatabase();
   late DictionaryRepository dictionary;
@@ -21,10 +34,16 @@ void main() {
     await db.delete(db.dictionaryEntries).go();
   });
 
-  Future<void> pumpVocab(WidgetTester tester) async {
+  Future<void> pumpVocab(
+    WidgetTester tester, {
+    Future<List<String>> Function(List<String>)? lemmaKeys,
+  }) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: VocabularyScreen(dictionaryRepository: dictionary),
+        home: VocabularyScreen(
+          dictionaryRepository: dictionary,
+          lemmaKeysForSurfaces: lemmaKeys ?? _identityLemmaKeys,
+        ),
       ),
     );
     expect(find.byKey(const Key('vocabLoading')), findsOneWidget);
@@ -43,8 +62,8 @@ void main() {
   });
 
   testWidgets('DE-04: List after several adds', (tester) async {
-    await dictionary.add(lemma: 'run', translation: 'бежать');
-    await dictionary.add(lemma: 'cat', translation: 'кот');
+    await dictionary.add(lemma: 'run', surfaceKey: 'run', translation: 'бежать');
+    await dictionary.add(lemma: 'cat', surfaceKey: 'cat', translation: 'кот');
 
     await pumpVocab(tester);
 
@@ -56,7 +75,11 @@ void main() {
   });
 
   testWidgets('DE-05: Remove entry from UI', (tester) async {
-    final added = await dictionary.add(lemma: 'run', translation: 'бежать');
+    final added = await dictionary.add(
+      lemma: 'run',
+      surfaceKey: 'run',
+      translation: 'бежать',
+    );
 
     await pumpVocab(tester);
     expect(find.text('run'), findsOneWidget);
@@ -91,5 +114,24 @@ void main() {
 
     expect(find.byKey(const Key('vocabFormError')), findsOneWidget);
     expect(await dictionary.list(), isEmpty);
+  });
+
+  testWidgets('Vocab add runs input through LemmaKeysForSurfacesFn',
+      (tester) async {
+    await pumpVocab(tester, lemmaKeys: _morphLemmaKeys);
+
+    await tester.enterText(find.byKey(const Key('vocabLemmaField')), 'Running');
+    await tester.enterText(
+      find.byKey(const Key('vocabTranslationField')),
+      'бежать',
+    );
+    await tester.tap(find.byKey(const Key('vocabAddButton')));
+    await tester.pumpAndSettle();
+
+    final list = await dictionary.list();
+    expect(list, hasLength(1));
+    expect(list.single.lemma, 'run');
+    expect(list.single.surfaceKey, 'running');
+    expect(list.single.translation, 'бежать');
   });
 }

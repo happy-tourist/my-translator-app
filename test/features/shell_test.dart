@@ -29,6 +29,8 @@ void main() {
           folderRepository: FolderRepository(db, contentStore: store),
           documentRepository: DocumentRepository(db, contentStore: store),
           dictionaryRepository: DictionaryRepository(db),
+          lemmaKeysForSurfaces: (surfaces) async =>
+              surfaces.map((s) => s.trim().toLowerCase()).toList(),
         ),
       ),
     );
