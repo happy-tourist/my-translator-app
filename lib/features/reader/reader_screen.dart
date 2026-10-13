@@ -25,11 +25,12 @@ import 'package:my_translator_app/data/video/video_usable_path.dart';
 import 'package:my_translator_app/data/video/video_usable_path_platform.dart'
     as video_path;
 import 'package:my_translator_app/features/reader/cue_row.dart';
+import 'package:my_translator_app/features/reader/cue_text_at_second.dart';
 import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/features/reader/video_frame_cache.dart';
-import 'package:my_translator_app/features/reader/video_frame_page_math.dart';
-import 'package:my_translator_app/features/reader/video_frame_strip.dart';
+import 'package:my_translator_app/features/reader/video_second_math.dart';
+import 'package:my_translator_app/features/reader/video_second_timeline.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
 import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
 
@@ -134,12 +135,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
 
-  /// Active video strip session (VF-01…VF-09). Null ref → strip hidden.
+  /// Active video timeline session (VF-01…VF-13). Null ref → cue list shown.
   String? _videoRef;
   var _videoTotalSeconds = 0;
-  var _videoInitialPage = 1;
+  var _videoInitialSecond = 0;
+  var _videoCurrentSecond = 0;
   late VideoFrameCache _videoCache;
-  final _videoStripKey = GlobalKey<VideoFrameStripState>();
+  final _videoTimelineKey = GlobalKey<VideoSecondTimelineState>();
+  /// Outside Show/Hide remount so second scroll survives split toggle (VF-09).
+  final _videoTimelineScrollController = ItemScrollController();
+  final _videoTimelinePositions = ItemPositionsListener.create();
 
   /// Batch tokenize+mark cache (D5). Null while in-flight or after failure.
   List<rust_tokenize.CueTokensDto>? _cueTokensByIndex;
@@ -186,7 +191,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _selectionStart != null &&
       _selectionEnd != null;
 
-  bool get _hasVideoStrip =>
+  bool get _hasVideo =>
       _videoRef != null && _videoTotalSeconds >= 1;
 
   @override
@@ -668,11 +673,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (ref == null) return;
     _videoRef = ref;
     _videoTotalSeconds = attachment.durationSec;
-    final page = attachment.lastFramePage ?? 1;
-    final pages = videoFramePageCount(attachment.durationSec);
-    _videoInitialPage = pages < 1
-        ? 1
-        : page.clamp(1, pages);
+    // Prefer persisted last_second (lastFramePage column); else reading anchor.
+    final lastSecond = attachment.lastFramePage;
+    final jumpSecond = lastSecond != null
+        ? clampReadingTimeToSecond(lastSecond * 1000, attachment.durationSec)
+        : clampReadingTimeToSecond(
+            widget.initialReadingAnchor?.startMs ?? 0,
+            attachment.durationSec,
+          );
+    _videoInitialSecond = jumpSecond < 0 ? 0 : jumpSecond;
+    _videoCurrentSecond = _videoInitialSecond;
   }
 
   Future<void> _loadVideoAttachmentBestEffort() async {
@@ -681,6 +691,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
           .getVideoAttachment(widget.originalDocumentId);
       if (!mounted || attachment == null) return;
       setState(() => _applyVideoAttachment(attachment));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_hasVideo) return;
+        _videoTimelineKey.currentState?.jumpToSecond(_videoInitialSecond);
+      });
     } catch (e, st) {
       assert(() {
         debugPrint('getVideoAttachment failed (ignored): $e\n$st');
@@ -689,8 +703,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  /// Reading time before Load transform (visible cue top, timeline second, or
+  /// reading anchor) — VF-05 / D6.
+  int _currentReadingTimeMs() {
+    if (_hasVideo) {
+      final second = _videoTimelineKey.currentState?.currentSecond ??
+          _videoCurrentSecond;
+      return second * 1000;
+    }
+    final top = _topVisible(_originalPositions);
+    if (top != null &&
+        top.index >= 0 &&
+        top.index < widget.originalCues.length) {
+      return widget.originalCues[top.index].startMs.toInt();
+    }
+    return widget.initialReadingAnchor?.startMs ?? 0;
+  }
+
   Future<void> _loadVideo() async {
     if (_loadingVideo) return;
+    // Capture before async pick so jump reflects cue-list position (VF-05).
+    final readingTimeMs = _currentReadingTimeMs();
     setState(() => _loadingVideo = true);
     try {
       final pick = widget.videoPicker != null
@@ -723,16 +756,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (!mounted) return;
       final clearFrameCache =
           previous == null || previous.durationSec != totalSeconds;
-      final keepPage = !clearFrameCache && _hasVideoStrip
-          ? (_videoStripKey.currentState?.currentPage ?? _videoInitialPage)
-          : 1;
+      final jumpSecond = !clearFrameCache && _hasVideo
+          ? (_videoTimelineKey.currentState?.currentSecond ??
+              _videoCurrentSecond)
+          : clampReadingTimeToSecond(readingTimeMs, totalSeconds);
+      final safeSecond = jumpSecond < 0 ? 0 : jumpSecond;
 
       await widget.documentRepository.attachVideo(
         documentId: widget.originalDocumentId,
         videoUri: usable.originalUri ?? pick.originalUri ?? usable.filesystemPath,
         sandboxPath: usable.filesystemPath,
         durationSec: totalSeconds,
-        lastFramePage: keepPage,
+        lastFramePage: safeSecond,
         clearFrameCache: clearFrameCache,
       );
       if (!mounted) return;
@@ -740,12 +775,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
       setState(() {
         _videoRef = usable.filesystemPath;
         _videoTotalSeconds = totalSeconds;
-        _videoInitialPage = keepPage;
+        _videoInitialSecond = safeSecond;
+        _videoCurrentSecond = safeSecond;
         if (widget.videoFrameCache == null) {
           _videoCache = DocumentRepositoryVideoFrameCache(
             widget.documentRepository,
             widget.originalDocumentId,
           );
+        }
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _videoTimelineKey.currentState?.jumpToSecond(safeSecond);
+        if (_splitEnabled && _hasTranslationCues) {
+          unawaited(_syncTranslationToTimeMs(safeSecond * 1000));
         }
       });
     } on VideoFrameException catch (e) {
@@ -764,15 +807,45 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _removeVideo() async {
-    if (!_hasVideoStrip || _loadingVideo) return;
+    if (!_hasVideo || _loadingVideo) return;
+    final second = _videoTimelineKey.currentState?.currentSecond ??
+        _videoCurrentSecond;
     setState(() => _loadingVideo = true);
     try {
       await widget.documentRepository.detachVideo(widget.originalDocumentId);
       if (!mounted) return;
+      final restoreIndex = widget.originalCues.isEmpty
+          ? 0
+          : nearestCueIndex(
+              widget.originalCues,
+              BigInt.from(second * 1000),
+            ).clamp(0, widget.originalCues.length - 1);
       setState(() {
         _videoRef = null;
         _videoTotalSeconds = 0;
-        _videoInitialPage = 1;
+        _videoInitialSecond = 0;
+        _videoCurrentSecond = 0;
+        _originalInitialScrollIndex = restoreIndex;
+        _originalInitialAlignment = 0;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (widget.originalCues.isNotEmpty &&
+            _originalScrollController.isAttached) {
+          _originalScrollController.jumpTo(
+            index: restoreIndex,
+            alignment: 0,
+          );
+        }
+        if (_splitEnabled && _hasTranslationCues) {
+          unawaited(
+            _syncPanes(
+              fromOriginal: true,
+              sourceIndex: restoreIndex,
+              sourceAlignment: 0,
+            ),
+          );
+        }
       });
     } on LibraryValidationException catch (e) {
       _showVideoError(e.message);
@@ -789,11 +862,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
-  Future<void> _persistVideoLastFramePage(int page) async {
+  Future<void> _persistVideoLastSecond(int second) async {
     try {
       await widget.documentRepository.saveVideoLastFramePage(
         documentId: widget.originalDocumentId,
-        lastFramePage: page,
+        lastFramePage: second,
       );
     } catch (e, st) {
       assert(() {
@@ -803,45 +876,56 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
-  /// One-way frames → cues (D6): page change scrolls original (+ translation).
-  void _onVideoFramePageChanged(int page) {
-    _videoInitialPage = page;
-    unawaited(_persistVideoLastFramePage(page));
+  /// Timeline second change → translation sync (one-way) + persist (D6 / VF-06).
+  void _onVideoSecondChanged(int second) {
+    _videoCurrentSecond = second;
+    _videoInitialSecond = second;
+    unawaited(_persistVideoLastSecond(second));
+    if (_splitEnabled && _hasTranslationCues) {
+      unawaited(_syncTranslationToTimeMs(second * 1000));
+    }
+  }
 
-    if (!_hasVideoStrip || widget.originalCues.isEmpty) return;
-    final firstSec = videoFramePageFirstSecond(page, _videoTotalSeconds);
-    if (firstSec < 0) return;
-    final index = nearestCueIndex(
-      widget.originalCues,
-      BigInt.from(firstSec * 1000),
-    );
-    if (index < 0) return;
+  /// Sync translation pane to [timeMs] without moving the video timeline.
+  Future<void> _syncTranslationToTimeMs(int timeMs, {int attempt = 0}) async {
+    if (_syncing || !_splitEnabled) return;
+    final translation = _translationCues;
+    if (translation == null || translation.isEmpty) return;
 
-    void jump() {
-      if (!mounted) return;
-      if (_originalScrollController.isAttached) {
-        _originalScrollController.jumpTo(index: index, alignment: 0);
-      }
-      if (_splitEnabled && _hasTranslationCues) {
-        unawaited(
-          _syncPanes(
-            fromOriginal: true,
-            sourceIndex: index,
-            sourceAlignment: 0,
-          ),
-        );
-      }
+    if (!_translationScrollController.isAttached) {
+      if (attempt >= 8) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_syncTranslationToTimeMs(timeMs, attempt: attempt + 1));
+      });
+      return;
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) => jump());
+    final nearest = nearestCueIndex(translation, BigInt.from(timeMs));
+    if (nearest < 0) return;
+
+    _syncing = true;
+    try {
+      if (!_translationScrollController.isAttached) return;
+      // Jump (not animated scroll): timeline second changes are discrete and
+      // must not leave the bottom pane mid-animation in tests / remounts.
+      _translationScrollController.jumpTo(index: nearest, alignment: 0);
+    } finally {
+      _syncing = false;
+    }
   }
 
   void _toggleSplit() {
     // RS-10 / RS-11 / D7: remounting the original list resets scroll — capture
     // top-visible anchor before Show *and* Hide; seed initialScrollIndex so
     // the first painted frame is not cue 0; jumpTo after layout as backup.
+    // With video: preserve timeline second (VF-09); do not reset to 0.
     final enabling = !_splitEnabled;
-    final anchor = _topVisible(_originalPositions);
+    final restoreSecond = _hasVideo
+        ? (_videoTimelineKey.currentState?.currentSecond ??
+            _videoCurrentSecond)
+        : null;
+    final anchor = _hasVideo ? null : _topVisible(_originalPositions);
     final restoreIndex = (anchor?.index ?? 0).clamp(
       0,
       widget.originalCues.isEmpty ? 0 : widget.originalCues.length - 1,
@@ -850,13 +934,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
         (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
 
     setState(() {
-      _originalInitialScrollIndex = restoreIndex;
-      _originalInitialAlignment = restoreAlignment;
+      if (restoreSecond != null) {
+        _videoInitialSecond = restoreSecond;
+        _videoCurrentSecond = restoreSecond;
+      } else {
+        _originalInitialScrollIndex = restoreIndex;
+        _originalInitialAlignment = restoreAlignment;
+      }
       _splitEnabled = enabling;
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (_hasVideo) {
+        final second = restoreSecond ?? _videoCurrentSecond;
+        _videoTimelineKey.currentState?.jumpToSecond(second);
+        if (enabling && _hasTranslationCues) {
+          unawaited(_syncTranslationToTimeMs(second * 1000));
+        }
+        return;
+      }
       if (widget.originalCues.isNotEmpty &&
           _originalScrollController.isAttached) {
         _originalScrollController.jumpTo(
@@ -881,6 +978,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   void _restoreInitialReadingAnchor({int attempt = 0}) {
     if (_didRestoreInitialAnchor || !mounted) return;
+
+    // VF-13: with video, timeline already has initialSecond / last_second.
+    if (_hasVideo) {
+      _didRestoreInitialAnchor = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _videoTimelineKey.currentState?.jumpToSecond(_videoInitialSecond);
+        if (_hasTranslationCues && _splitEnabled) {
+          unawaited(_syncTranslationToTimeMs(_videoInitialSecond * 1000));
+        }
+      });
+      return;
+    }
 
     final saved = widget.initialReadingAnchor;
     if (saved == null || widget.originalCues.isEmpty) {
@@ -988,7 +1098,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _syncPanes(fromOriginal: true);
+        if (_hasVideo) {
+          final second = _videoTimelineKey.currentState?.currentSecond ??
+              _videoCurrentSecond;
+          unawaited(_syncTranslationToTimeMs(second * 1000));
+        } else {
+          unawaited(_syncPanes(fromOriginal: true));
+        }
       });
     } on rust_parse.ParseErrorKind catch (kind) {
       _showError(messageForParseError(kind));
@@ -1097,6 +1213,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (translation == null || translation.isEmpty) return;
     if (widget.originalCues.isEmpty) return;
 
+    // Video replaces the original cue list: VF-07 blocks bottom→original;
+    // original→bottom must use timeline second (not detached cue positions).
+    if (_hasVideo) {
+      if (!fromOriginal) return;
+      final second = _videoTimelineKey.currentState?.currentSecond ??
+          _videoCurrentSecond;
+      await _syncTranslationToTimeMs(second * 1000);
+      return;
+    }
+
     final sourceListener =
         fromOriginal ? _originalPositions : _translationPositions;
     final sourceCues = fromOriginal ? widget.originalCues : translation;
@@ -1181,6 +1307,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
     if (_syncing || !_splitEnabled) return false;
     if (_translationCues == null || _translationCues!.isEmpty) return false;
+    // VF-07 / D6: with video, bottom scroll must not move original timeline.
+    if (_hasVideo && !fromOriginal) return false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _syncPanes(fromOriginal: fromOriginal);
@@ -1205,7 +1333,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         actions: [
           IconButton(
             key: const Key('readerLoadVideo'),
-            tooltip: _hasVideoStrip ? 'Replace video' : 'Load video',
+            tooltip: _hasVideo ? 'Replace video' : 'Load video',
             icon: _loadingVideo
                 ? const SizedBox(
                     width: 20,
@@ -1215,7 +1343,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 : const Icon(Icons.video_file_outlined),
             onPressed: _loadingVideo ? null : _loadVideo,
           ),
-          if (_hasVideoStrip)
+          if (_hasVideo)
             IconButton(
               key: const Key('readerRemoveVideo'),
               tooltip: 'Remove video',
@@ -1232,25 +1360,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ),
         ],
       ),
-      // D4: VideoFrameStrip MUST live outside Show/Hide remount branch.
-      body: Column(
-        children: [
-          if (_hasVideoStrip)
-            VideoFrameStrip(
-              key: _videoStripKey,
-              videoRef: _videoRef!,
-              totalSeconds: _videoTotalSeconds,
-              originalCues: widget.originalCues,
-              extractor: _videoExtractor,
-              cache: _videoCache,
-              initialPage: _videoInitialPage,
-              onPageChanged: _onVideoFramePageChanged,
-            ),
-          Expanded(
-            child: _splitEnabled ? _buildSplitBody() : _buildSinglePane(),
-          ),
-        ],
-      ),
+      // D4 revision: timeline replaces original cue body (not a strip above).
+      body: _splitEnabled ? _buildSplitBody() : _buildSinglePane(),
       // D6: CTA when selection non-empty; sheet/save is block 3.
       bottomNavigationBar: _hasSelection ? _buildAddVocabCta() : null,
     );
@@ -1280,13 +1391,81 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _buildSinglePane() {
+    return _buildOriginalPane(listKey: const Key('readerCueList'));
+  }
+
+  /// Original pane: video timeline (VF-01) or cue list. Frames never in bottom.
+  Widget _buildOriginalPane({required Key listKey}) {
+    if (_hasVideo) {
+      return VideoSecondTimeline(
+        key: _videoTimelineKey,
+        videoRef: _videoRef!,
+        totalSeconds: _videoTotalSeconds,
+        originalCues: widget.originalCues,
+        extractor: _videoExtractor,
+        cache: _videoCache,
+        initialSecond: _videoInitialSecond,
+        itemScrollController: _videoTimelineScrollController,
+        itemPositionsListener: _videoTimelinePositions,
+        onSecondChanged: _onVideoSecondChanged,
+        buildCueText: _buildVideoCueText,
+      );
+    }
     return _buildCueList(
-      listKey: const Key('readerCueList'),
+      listKey: listKey,
       cues: widget.originalCues,
       keyPrefix: 'readerCue',
       itemScrollController: _originalScrollController,
       itemPositionsListener: _originalPositions,
       fromOriginal: true,
+    );
+  }
+
+  /// Cue text under a frame with tap/highlight when tokenize is ready (VF-12).
+  Widget _buildVideoCueText(
+    BuildContext context,
+    int second,
+    String cueText,
+  ) {
+    if (cueText.isEmpty) {
+      return Text(
+        '',
+        key: Key('videoSecondText_$second'),
+        style: Theme.of(context).textTheme.bodyMedium,
+      );
+    }
+    final cueIndex = cueIndexAtSecond(widget.originalCues, second);
+    if (cueIndex == null) {
+      return Text(
+        cueText,
+        key: Key('videoSecondText_$second'),
+        style: Theme.of(context).textTheme.bodyMedium,
+      );
+    }
+    final tokensReady = _tokenizeReady &&
+        _cueTokensByIndex != null &&
+        cueIndex < _cueTokensByIndex!.length;
+    final tokens =
+        tokensReady ? _cueTokensByIndex![cueIndex].tokens : null;
+    final isActive = _hasSelection && _activeCueIndex == cueIndex;
+    // keySuffix: one cue may cover several seconds → unique Keys per row (VF-12).
+    return KeyedSubtree(
+      key: Key('videoSecondText_$second'),
+      child: CueRow(
+        cue: widget.originalCues[cueIndex],
+        keyPrefix: 'readerCue',
+        cueListIndex: cueIndex,
+        tokens: tokens,
+        selectionStart: isActive ? _selectionStart : null,
+        selectionEnd: isActive ? _selectionEnd : null,
+        flashTokenIndex: isActive ? _flashTokenIndex : null,
+        onTokenTap: tokensReady && tokens != null && tokens.isNotEmpty
+            ? (tokenIndex) => _onOriginalTokenTap(cueIndex, tokenIndex)
+            : null,
+        showTimestamp: false,
+        padding: EdgeInsets.zero,
+        keySuffix: 's$second',
+      ),
     );
   }
 
@@ -1316,13 +1495,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           children: [
             SizedBox(
               height: topH,
-              child: _buildCueList(
+              child: _buildOriginalPane(
                 listKey: const Key('readerOriginalCueList'),
-                cues: widget.originalCues,
-                keyPrefix: 'readerCue',
-                itemScrollController: _originalScrollController,
-                itemPositionsListener: _originalPositions,
-                fromOriginal: true,
               ),
             ),
             GestureDetector(

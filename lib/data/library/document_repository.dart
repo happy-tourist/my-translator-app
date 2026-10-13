@@ -33,10 +33,11 @@ class VideoAttachment {
   /// Optional sandbox extract path (native usable filesystem path).
   final String? sandboxPath;
 
-  /// Probed duration in whole seconds (≥ 1 when strip is shown).
+  /// Probed duration in whole seconds (≥ 1 when timeline is shown).
   final int durationSec;
 
-  /// Optional last viewed frame-strip page (1-based).
+  /// Optional last viewed timeline second (0-based). Column historically named
+  /// `last_frame_page`; reused as `last_second` (design D7).
   final int? lastFramePage;
 }
 
@@ -275,6 +276,9 @@ class DocumentRepository {
     if (durationSec < 0) {
       throw LibraryValidationException('Video duration must not be negative');
     }
+    if (lastFramePage != null && lastFramePage < 0) {
+      throw LibraryValidationException('Last second must be ≥ 0');
+    }
 
     await _db.transaction(() async {
       if (clearFrameCache) {
@@ -293,7 +297,8 @@ class DocumentRepository {
     });
   }
 
-  /// Persists optional strip page without touching JPEG cache (D7 last_frame_page).
+  /// Persists optional last timeline second without touching JPEG cache
+  /// (D7 `last_second` via `video_last_frame_page` column).
   Future<void> saveVideoLastFramePage({
     required int documentId,
     required int lastFramePage,
@@ -302,8 +307,8 @@ class DocumentRepository {
     if (original == null) {
       throw LibraryValidationException('Document not found');
     }
-    if (lastFramePage < 1) {
-      throw LibraryValidationException('Frame page must be ≥ 1');
+    if (lastFramePage < 0) {
+      throw LibraryValidationException('Last second must be ≥ 0');
     }
     if (original.videoDurationSec == null) {
       return;

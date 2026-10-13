@@ -22,6 +22,9 @@ class CueRow extends StatelessWidget {
     this.selectionEnd,
     this.flashTokenIndex,
     this.onTokenTap,
+    this.showTimestamp = true,
+    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    this.keySuffix,
   });
 
   final CueDto cue;
@@ -44,6 +47,19 @@ class CueRow extends StatelessWidget {
 
   final ValueChanged<int>? onTokenTap;
 
+  /// When false, omit the cue time range (video timeline embeds its own stamp).
+  final bool showTimestamp;
+
+  /// Outer padding; use [EdgeInsets.zero] when embedded under a video frame.
+  final EdgeInsetsGeometry padding;
+
+  /// Disambiguates Keys when the same cue is embedded under several video
+  /// seconds (one cue covering `[startMs,endMs)` spanning multiple rows).
+  final String? keySuffix;
+
+  String _keyed(String base) =>
+      keySuffix == null ? base : '${base}_$keySuffix';
+
   @override
   Widget build(BuildContext context) {
     final timeStyle = Theme.of(context).textTheme.labelMedium;
@@ -56,33 +72,36 @@ class CueRow extends StatelessWidget {
         tokenList != null && tokenList.isNotEmpty && onTokenTap != null;
 
     return Padding(
-      key: Key('${keyPrefix}_${cue.index}'),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      key: Key(_keyed('${keyPrefix}_${cue.index}')),
+      padding: padding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            time,
-            key: Key('${keyPrefix}Time_${cue.index}'),
-            style: timeStyle,
-          ),
-          const SizedBox(height: 4),
+          if (showTimestamp) ...[
+            Text(
+              time,
+              key: Key(_keyed('${keyPrefix}Time_${cue.index}')),
+              style: timeStyle,
+            ),
+            const SizedBox(height: 4),
+          ],
           if (selectable)
             _SelectableCueText(
               cueText: text,
               cueListIndex: cueListIndex ?? cue.index,
               tokens: tokenList,
               bodyStyle: bodyStyle,
-              textKey: Key('${keyPrefix}Text_${cue.index}'),
+              textKey: Key(_keyed('${keyPrefix}Text_${cue.index}')),
               selectionStart: selectionStart,
               selectionEnd: selectionEnd,
               flashTokenIndex: flashTokenIndex,
               onTokenTap: onTokenTap!,
+              keySuffix: keySuffix,
             )
           else
             Text(
               text,
-              key: Key('${keyPrefix}Text_${cue.index}'),
+              key: Key(_keyed('${keyPrefix}Text_${cue.index}')),
               style: bodyStyle,
             ),
         ],
@@ -102,6 +121,7 @@ class _SelectableCueText extends StatelessWidget {
     required this.selectionEnd,
     required this.flashTokenIndex,
     required this.onTokenTap,
+    this.keySuffix,
   });
 
   final String cueText;
@@ -113,6 +133,7 @@ class _SelectableCueText extends StatelessWidget {
   final int? selectionEnd;
   final int? flashTokenIndex;
   final ValueChanged<int> onTokenTap;
+  final String? keySuffix;
 
   @override
   Widget build(BuildContext context) {
@@ -167,12 +188,15 @@ class _SelectableCueText extends StatelessWidget {
               ? selectedStyle
               : (token.isInVocab ? highlightStyle : bodyStyle));
       // WidgetSpan (not TextSpan+recognizer): Keys for D9 finders need a Widget.
+      final tokenKey = keySuffix == null
+          ? 'readerCueToken_${cueListIndex}_$idx'
+          : 'readerCueToken_${cueListIndex}_${idx}_$keySuffix';
       spans.add(
         WidgetSpan(
           alignment: PlaceholderAlignment.baseline,
           baseline: TextBaseline.alphabetic,
           child: GestureDetector(
-            key: Key('readerCueToken_${cueListIndex}_$idx'),
+            key: Key(tokenKey),
             behavior: HitTestBehavior.translucent,
             onTap: () => onTokenTap(idx),
             child: Text(
