@@ -301,6 +301,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
         }());
       }
 
+      // LD-19: best-effort video attachment; fail must not block open.
+      VideoAttachment? initialVideoAttachment;
+      try {
+        initialVideoAttachment =
+            await widget.documentRepository.getVideoAttachment(doc.id);
+      } catch (e, st) {
+        assert(() {
+          debugPrint('getVideoAttachment failed (ignored): $e\n$st');
+          return true;
+        }());
+      }
+
       if (!mounted) return;
       setState(() => _opening = false);
       await Navigator.of(context).push(
@@ -314,6 +326,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             translationCues: translationCues,
             translationDocumentId: translationDocumentId,
             initialReadingAnchor: initialReadingAnchor,
+            initialVideoAttachment: initialVideoAttachment,
             parseSubtitles: widget.parseSubtitles,
             tokenizeCues: widget.tokenizeCues,
             markVocabTokens: widget.markVocabTokens,

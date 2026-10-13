@@ -17,9 +17,19 @@ import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
 import 'package:my_translator_app/data/translate/offline_translate.dart';
 import 'package:my_translator_app/data/translate/offline_translate_platform.dart';
+import 'package:my_translator_app/data/video/reader_video_picker.dart';
+import 'package:my_translator_app/data/video/video_frame_errors.dart';
+import 'package:my_translator_app/data/video/video_frame_extractor.dart';
+import 'package:my_translator_app/data/video/video_frame_extractor_platform.dart';
+import 'package:my_translator_app/data/video/video_usable_path.dart';
+import 'package:my_translator_app/data/video/video_usable_path_platform.dart'
+    as video_path;
 import 'package:my_translator_app/features/reader/cue_row.dart';
 import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
+import 'package:my_translator_app/features/reader/video_frame_cache.dart';
+import 'package:my_translator_app/features/reader/video_frame_page_math.dart';
+import 'package:my_translator_app/features/reader/video_frame_strip.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
 import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
 
@@ -45,11 +55,16 @@ class ReaderScreen extends StatefulWidget {
     this.translationCues,
     this.translationDocumentId,
     this.initialReadingAnchor,
+    this.initialVideoAttachment,
     this.parseSubtitles,
     this.tokenizeCues,
     this.markVocabTokens,
     this.filePicker,
     this.offlineTranslate,
+    this.videoPicker,
+    this.videoFrameExtractor,
+    this.videoFrameCache,
+    this.resolveUsableVideoPath,
   });
 
   final String title;
@@ -62,6 +77,9 @@ class ReaderScreen extends StatefulWidget {
 
   /// Saved original-pane position from Library open (RS-12 / LD-17).
   final ReadingAnchor? initialReadingAnchor;
+
+  /// Best-effort video meta from Library open (LD-19); null → Reader loads.
+  final VideoAttachment? initialVideoAttachment;
 
   /// Defaults to generated FRB [rust_parse.parseSubtitles].
   final ParseSubtitlesFn? parseSubtitles;
@@ -78,6 +96,18 @@ class ReaderScreen extends StatefulWidget {
   /// Offline EN→RU gloss for Add/Edit sheets. Defaults to platform facade.
   final OfflineTranslateFn? offlineTranslate;
 
+  /// Injectable video pick (design D8). Defaults to [defaultReaderVideoPicker].
+  final ReaderVideoPicker? videoPicker;
+
+  /// Injectable frame extract facade. Defaults to platform FFmpeg/canvas.
+  final VideoFrameExtractor? videoFrameExtractor;
+
+  /// Injectable JPEG cache. Defaults to Drift [DocumentRepositoryVideoFrameCache].
+  final VideoFrameCache? videoFrameCache;
+
+  /// Injectable usable-path resolve after pick (tests). Defaults to platform.
+  final ResolveUsableVideoPathFn? resolveUsableVideoPath;
+
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
@@ -93,6 +123,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   var _syncing = false;
   var _userInitiatedScroll = false;
   var _loadingTranslation = false;
+  var _loadingVideo = false;
   var _didRestoreInitialAnchor = false;
 
   /// Applied as [ScrollablePositionedList.initialScrollIndex] on original
@@ -102,6 +133,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
+
+  /// Active video strip session (VF-01…VF-09). Null ref → strip hidden.
+  String? _videoRef;
+  var _videoTotalSeconds = 0;
+  var _videoInitialPage = 1;
+  late VideoFrameCache _videoCache;
+  final _videoStripKey = GlobalKey<VideoFrameStripState>();
 
   /// Batch tokenize+mark cache (D5). Null while in-flight or after failure.
   List<rust_tokenize.CueTokensDto>? _cueTokensByIndex;
@@ -134,6 +172,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   late final OfflineTranslateFn _offlineTranslate =
       widget.offlineTranslate ?? createPlatformOfflineTranslate();
 
+  late final VideoFrameExtractor _videoExtractor =
+      widget.videoFrameExtractor ?? createPlatformVideoFrameExtractor();
+
   bool get _hasTranslationCues =>
       _translationCues != null && _translationCues!.isNotEmpty;
 
@@ -145,11 +186,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _selectionStart != null &&
       _selectionEnd != null;
 
+  bool get _hasVideoStrip =>
+      _videoRef != null && _videoTotalSeconds >= 1;
+
   @override
   void initState() {
     super.initState();
     _translationCues = widget.translationCues;
     _translationDocumentId = widget.translationDocumentId;
+    _videoCache = widget.videoFrameCache ??
+        DocumentRepositoryVideoFrameCache(
+          widget.documentRepository,
+          widget.originalDocumentId,
+        );
+    final initialVideo = widget.initialVideoAttachment;
+    if (initialVideo != null) {
+      _applyVideoAttachment(initialVideo);
+    } else {
+      unawaited(_loadVideoAttachmentBestEffort());
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _restoreInitialReadingAnchor();
     });
@@ -585,6 +640,202 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  void _showVideoError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: const Key('readerVideoErrorSnack'),
+        content: Text(message),
+      ),
+    );
+  }
+
+  /// Prefer sandbox/usable path; dead link still yields a ref so cache can show
+  /// (LD-22) while extract of missing seconds fails until re-pick.
+  String? _videoRefFromAttachment(VideoAttachment attachment) {
+    final sandbox = attachment.sandboxPath;
+    if (isUsableFilesystemPath(sandbox)) return sandbox;
+    final uri = attachment.videoUri;
+    if (isUsableFilesystemPath(uri)) return uri;
+    if (sandbox != null && sandbox.isNotEmpty) return sandbox;
+    if (uri != null && uri.isNotEmpty) return uri;
+    return null;
+  }
+
+  void _applyVideoAttachment(VideoAttachment attachment) {
+    if (attachment.durationSec < 1) return;
+    final ref = _videoRefFromAttachment(attachment);
+    if (ref == null) return;
+    _videoRef = ref;
+    _videoTotalSeconds = attachment.durationSec;
+    final page = attachment.lastFramePage ?? 1;
+    final pages = videoFramePageCount(attachment.durationSec);
+    _videoInitialPage = pages < 1
+        ? 1
+        : page.clamp(1, pages);
+  }
+
+  Future<void> _loadVideoAttachmentBestEffort() async {
+    try {
+      final attachment = await widget.documentRepository
+          .getVideoAttachment(widget.originalDocumentId);
+      if (!mounted || attachment == null) return;
+      setState(() => _applyVideoAttachment(attachment));
+    } catch (e, st) {
+      assert(() {
+        debugPrint('getVideoAttachment failed (ignored): $e\n$st');
+        return true;
+      }());
+    }
+  }
+
+  Future<void> _loadVideo() async {
+    if (_loadingVideo) return;
+    setState(() => _loadingVideo = true);
+    try {
+      final pick = widget.videoPicker != null
+          ? await widget.videoPicker!()
+          : await defaultReaderVideoPicker();
+      if (pick == null || !mounted) return;
+
+      final resolve =
+          widget.resolveUsableVideoPath ?? video_path.resolveUsableVideoPath;
+      final usable = await resolve(
+        pick.toPickedVideoSource(),
+        documentId: '${widget.originalDocumentId}',
+      );
+      if (!mounted) return;
+
+      final duration = await _videoExtractor.probeDuration(usable.filesystemPath);
+      if (!mounted) return;
+      final totalSeconds = duration.inSeconds;
+      if (totalSeconds < 1) {
+        _showVideoError(
+          videoFrameUserMessage(VideoFrameErrorKind.probeFailed),
+        );
+        return;
+      }
+
+      // LD-22: same duration re-pick (dead link) keeps JPEG cache.
+      // LD-23 / VF replace: different duration → clear prior frames.
+      final previous = await widget.documentRepository
+          .getVideoAttachment(widget.originalDocumentId);
+      if (!mounted) return;
+      final clearFrameCache =
+          previous == null || previous.durationSec != totalSeconds;
+      final keepPage = !clearFrameCache && _hasVideoStrip
+          ? (_videoStripKey.currentState?.currentPage ?? _videoInitialPage)
+          : 1;
+
+      await widget.documentRepository.attachVideo(
+        documentId: widget.originalDocumentId,
+        videoUri: usable.originalUri ?? pick.originalUri ?? usable.filesystemPath,
+        sandboxPath: usable.filesystemPath,
+        durationSec: totalSeconds,
+        lastFramePage: keepPage,
+        clearFrameCache: clearFrameCache,
+      );
+      if (!mounted) return;
+
+      setState(() {
+        _videoRef = usable.filesystemPath;
+        _videoTotalSeconds = totalSeconds;
+        _videoInitialPage = keepPage;
+        if (widget.videoFrameCache == null) {
+          _videoCache = DocumentRepositoryVideoFrameCache(
+            widget.documentRepository,
+            widget.originalDocumentId,
+          );
+        }
+      });
+    } on VideoFrameException catch (e) {
+      _showVideoError(e.userMessage);
+    } catch (e, st) {
+      assert(() {
+        debugPrint('Load video failed: $e\n$st');
+        return true;
+      }());
+      _showVideoError(videoFrameUserMessage(VideoFrameErrorKind.probeFailed));
+    } finally {
+      if (mounted) {
+        setState(() => _loadingVideo = false);
+      }
+    }
+  }
+
+  Future<void> _removeVideo() async {
+    if (!_hasVideoStrip || _loadingVideo) return;
+    setState(() => _loadingVideo = true);
+    try {
+      await widget.documentRepository.detachVideo(widget.originalDocumentId);
+      if (!mounted) return;
+      setState(() {
+        _videoRef = null;
+        _videoTotalSeconds = 0;
+        _videoInitialPage = 1;
+      });
+    } on LibraryValidationException catch (e) {
+      _showVideoError(e.message);
+    } catch (e, st) {
+      assert(() {
+        debugPrint('Remove video failed: $e\n$st');
+        return true;
+      }());
+      _showVideoError("Couldn't remove video. Try again.");
+    } finally {
+      if (mounted) {
+        setState(() => _loadingVideo = false);
+      }
+    }
+  }
+
+  Future<void> _persistVideoLastFramePage(int page) async {
+    try {
+      await widget.documentRepository.saveVideoLastFramePage(
+        documentId: widget.originalDocumentId,
+        lastFramePage: page,
+      );
+    } catch (e, st) {
+      assert(() {
+        debugPrint('saveVideoLastFramePage failed (ignored): $e\n$st');
+        return true;
+      }());
+    }
+  }
+
+  /// One-way frames → cues (D6): page change scrolls original (+ translation).
+  void _onVideoFramePageChanged(int page) {
+    _videoInitialPage = page;
+    unawaited(_persistVideoLastFramePage(page));
+
+    if (!_hasVideoStrip || widget.originalCues.isEmpty) return;
+    final firstSec = videoFramePageFirstSecond(page, _videoTotalSeconds);
+    if (firstSec < 0) return;
+    final index = nearestCueIndex(
+      widget.originalCues,
+      BigInt.from(firstSec * 1000),
+    );
+    if (index < 0) return;
+
+    void jump() {
+      if (!mounted) return;
+      if (_originalScrollController.isAttached) {
+        _originalScrollController.jumpTo(index: index, alignment: 0);
+      }
+      if (_splitEnabled && _hasTranslationCues) {
+        unawaited(
+          _syncPanes(
+            fromOriginal: true,
+            sourceIndex: index,
+            sourceAlignment: 0,
+          ),
+        );
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => jump());
+  }
+
   void _toggleSplit() {
     // RS-10 / RS-11 / D7: remounting the original list resets scroll — capture
     // top-visible anchor before Show *and* Hide; seed initialScrollIndex so
@@ -953,6 +1204,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
         ),
         actions: [
           IconButton(
+            key: const Key('readerLoadVideo'),
+            tooltip: _hasVideoStrip ? 'Replace video' : 'Load video',
+            icon: _loadingVideo
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.video_file_outlined),
+            onPressed: _loadingVideo ? null : _loadVideo,
+          ),
+          if (_hasVideoStrip)
+            IconButton(
+              key: const Key('readerRemoveVideo'),
+              tooltip: 'Remove video',
+              icon: const Icon(Icons.videocam_off_outlined),
+              onPressed: _loadingVideo ? null : _removeVideo,
+            ),
+          IconButton(
             key: const Key('readerSplitToggle'),
             tooltip: _splitEnabled ? 'Hide split' : 'Show split',
             icon: Icon(
@@ -962,7 +1232,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ),
         ],
       ),
-      body: _splitEnabled ? _buildSplitBody() : _buildSinglePane(),
+      // D4: VideoFrameStrip MUST live outside Show/Hide remount branch.
+      body: Column(
+        children: [
+          if (_hasVideoStrip)
+            VideoFrameStrip(
+              key: _videoStripKey,
+              videoRef: _videoRef!,
+              totalSeconds: _videoTotalSeconds,
+              originalCues: widget.originalCues,
+              extractor: _videoExtractor,
+              cache: _videoCache,
+              initialPage: _videoInitialPage,
+              onPageChanged: _onVideoFramePageChanged,
+            ),
+          Expanded(
+            child: _splitEnabled ? _buildSplitBody() : _buildSinglePane(),
+          ),
+        ],
+      ),
       // D6: CTA when selection non-empty; sheet/save is block 3.
       bottomNavigationBar: _hasSelection ? _buildAddVocabCta() : null,
     );

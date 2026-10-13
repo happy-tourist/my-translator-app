@@ -28,7 +28,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Current vs target
 
-**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **4**). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`). Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). **Offline Translate** (OPUS-MT EN→RU) on Vocab + Reader sheets via `lib/data/translate/` (native Rust ORT / Web Transformers.js). Rust: `parse/` + `tokenize/` + `lemmatize/` + `translate/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI).
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **5**). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`) and optional **video frame strip** (Dart FFmpeg/canvas, Drift JPEG cache). Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). **Offline Translate** (OPUS-MT EN→RU) on Vocab + Reader sheets via `lib/data/translate/` (native Rust ORT / Web Transformers.js). Rust: `parse/` + `tokenize/` + `lemmatize/` + `translate/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI; **no** Rust video API).
 
 **Ещё target:** phrase-span highlight / phrase Add; Rust cue pairing for index-aligned split — следующие changes.
 
@@ -49,7 +49,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 - Парсинг субтитров: SRT, VTT, ASS/SSA (сейчас)
 - Токенизация + EN WordNet лемматизация + mark (сейчас); RU morph — later
-- Личный словарь: переводы + контекст + `surface_key` (сейчас, Drift schema 4)
+- Личный словарь: переводы + контекст + `surface_key` (сейчас, Drift schema 5)
 - Подсветка сохранённых слов с учётом морфологии (сейчас, original pane)
 - Тап → bottom CTA + add/edit vocab sheet (сейчас); Translate на sheet заполняет Translation (сейчас); мгновенная word-card chrome — later
 - Выделение фразы → перевод фразы целиком (target)
@@ -60,7 +60,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD + Translate); cues-first Reader with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time sync + reading-anchor resume; Drift schema v4 (`surface_key` on dictionary entries, stub→morph migration via `lemmaKeysForSurfaces`) + repositories; offline translate facade `lib/data/translate/`
+- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation / video) + **Vocab** (CRUD + Translate); cues-first Reader with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time sync + reading-anchor resume, optional video frame strip (`lib/data/video/`); Drift schema v5 (`surface_key`, video attachment + `DocumentVideoFrames`) + repositories; offline translate facade `lib/data/translate/`
 - Rust: `parse/` + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + `translate/` (native ORT) + FRB `parse_subtitles` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` / `init_offline_translate` / `translate_text` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold); Web MT — Transformers.js worker + `web/translate_bridge.js`
 

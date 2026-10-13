@@ -29,6 +29,7 @@ void main() {
   });
 
   tearDown(() async {
+    await db.delete(db.documentVideoFrames).go();
     await db.delete(db.documents).go();
     await db.delete(db.folders).go();
   });
@@ -292,5 +293,233 @@ void main() {
     final reloaded = await documents.getById(original.id);
     expect(reloaded!.lastReadStartMs, 4500);
     expect(reloaded.lastReadAlignment, closeTo(0.25, 1e-9));
+  });
+
+  test('LD-20: Persist video durable link and frame cache', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+
+    expect(await documents.getVideoAttachment(original.id), isNull);
+
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///videos/ep1.mp4',
+      sandboxPath: '/tmp/sandbox/ep1.mp4',
+      durationSec: 120,
+      lastFramePage: 2,
+    );
+
+    final jpeg = Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x01]);
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 0,
+      jpegBytes: jpeg,
+    );
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 3,
+      jpegBytes: Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x03]),
+    );
+
+    final attachment = await documents.getVideoAttachment(original.id);
+    expect(attachment, isNotNull);
+    expect(attachment!.videoUri, 'file:///videos/ep1.mp4');
+    expect(attachment.sandboxPath, '/tmp/sandbox/ep1.mp4');
+    expect(attachment.durationSec, 120);
+    expect(attachment.lastFramePage, 2);
+
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 0),
+      jpeg,
+    );
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 3),
+      Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x03]),
+    );
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 1),
+      isNull,
+    );
+  });
+
+  test('LD-21: Remove video clears attachment and frame cache', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///videos/ep1.mp4',
+      durationSec: 30,
+    );
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 0,
+      jpegBytes: Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9]),
+    );
+
+    await documents.detachVideo(original.id);
+
+    expect(await documents.getVideoAttachment(original.id), isNull);
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 0),
+      isNull,
+    );
+    expect(await documents.getById(original.id), isNotNull);
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.id), [original.id]);
+  });
+
+  test('LD-18: Delete original cascades video attachment', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final keep = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'keep.srt',
+      bytes: _srtBytes('keep'),
+    );
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///videos/ep1.mp4',
+      durationSec: 60,
+    );
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 5,
+      jpegBytes: Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x05]),
+    );
+
+    await documents.deleteDocument(original.id);
+
+    expect(await documents.getById(original.id), isNull);
+    expect(await documents.getVideoAttachment(original.id), isNull);
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 5),
+      isNull,
+    );
+    final leftoverFrames = await db.select(db.documentVideoFrames).get();
+    expect(leftoverFrames, isEmpty);
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.id), [keep.id]);
+  });
+
+  test('LD-22: Dead video link keeps cached frames and allows re-pick',
+      () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///gone/missing.mp4',
+      durationSec: 90,
+    );
+    final cached = Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x0A]);
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 0,
+      jpegBytes: cached,
+    );
+
+    // Dead link: meta still returned; repository does not wipe cache.
+    final dead = await documents.getVideoAttachment(original.id);
+    expect(dead, isNotNull);
+    expect(dead!.videoUri, 'file:///gone/missing.mp4');
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 0),
+      cached,
+    );
+
+    // Re-pick restores a usable link without wiping prior JPEG (LD-22).
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///videos/repick.mp4',
+      sandboxPath: '/tmp/sandbox/repick.mp4',
+      durationSec: 90,
+      clearFrameCache: false,
+    );
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 0),
+      cached,
+    );
+    final newJpeg = Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x0B]);
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 6,
+      jpegBytes: newJpeg,
+    );
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 6),
+      newJpeg,
+    );
+    final repicked = await documents.getVideoAttachment(original.id);
+    expect(repicked!.videoUri, 'file:///videos/repick.mp4');
+  });
+
+  test('LD-23: Replace video clears previous frame cache', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: _srtBytes('перевод'),
+    );
+
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///videos/old.mp4',
+      durationSec: 40,
+    );
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 1,
+      jpegBytes: Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x11]),
+    );
+    await documents.putFrameCache(
+      documentId: original.id,
+      second: 2,
+      jpegBytes: Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x22]),
+    );
+
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///videos/new.mp4',
+      sandboxPath: '/tmp/sandbox/new.mp4',
+      durationSec: 55,
+      lastFramePage: 1,
+    );
+
+    final attachment = await documents.getVideoAttachment(original.id);
+    expect(attachment!.videoUri, 'file:///videos/new.mp4');
+    expect(attachment.sandboxPath, '/tmp/sandbox/new.mp4');
+    expect(attachment.durationSec, 55);
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 1),
+      isNull,
+    );
+    expect(
+      await documents.getFrameCache(documentId: original.id, second: 2),
+      isNull,
+    );
+    expect(await documents.getById(original.id), isNotNull);
+    expect(await documents.getById(translation.id), isNotNull);
+    final reloaded = await documents.getById(original.id);
+    expect(reloaded!.translationDocumentId, translation.id);
   });
 }

@@ -461,6 +461,49 @@ class $DocumentsTable extends Documents
         type: DriftSqlType.double,
         requiredDuringInsert: false,
       );
+  static const VerificationMeta _videoUriMeta = const VerificationMeta(
+    'videoUri',
+  );
+  @override
+  late final GeneratedColumn<String> videoUri = GeneratedColumn<String>(
+    'video_uri',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _videoSandboxPathMeta = const VerificationMeta(
+    'videoSandboxPath',
+  );
+  @override
+  late final GeneratedColumn<String> videoSandboxPath = GeneratedColumn<String>(
+    'video_sandbox_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _videoDurationSecMeta = const VerificationMeta(
+    'videoDurationSec',
+  );
+  @override
+  late final GeneratedColumn<int> videoDurationSec = GeneratedColumn<int>(
+    'video_duration_sec',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _videoLastFramePageMeta =
+      const VerificationMeta('videoLastFramePage');
+  @override
+  late final GeneratedColumn<int> videoLastFramePage = GeneratedColumn<int>(
+    'video_last_frame_page',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -496,6 +539,10 @@ class $DocumentsTable extends Documents
     translationDocumentId,
     lastReadStartMs,
     lastReadAlignment,
+    videoUri,
+    videoSandboxPath,
+    videoDurationSec,
+    videoLastFramePage,
     createdAt,
     updatedAt,
   ];
@@ -577,6 +624,39 @@ class $DocumentsTable extends Documents
         ),
       );
     }
+    if (data.containsKey('video_uri')) {
+      context.handle(
+        _videoUriMeta,
+        videoUri.isAcceptableOrUnknown(data['video_uri']!, _videoUriMeta),
+      );
+    }
+    if (data.containsKey('video_sandbox_path')) {
+      context.handle(
+        _videoSandboxPathMeta,
+        videoSandboxPath.isAcceptableOrUnknown(
+          data['video_sandbox_path']!,
+          _videoSandboxPathMeta,
+        ),
+      );
+    }
+    if (data.containsKey('video_duration_sec')) {
+      context.handle(
+        _videoDurationSecMeta,
+        videoDurationSec.isAcceptableOrUnknown(
+          data['video_duration_sec']!,
+          _videoDurationSecMeta,
+        ),
+      );
+    }
+    if (data.containsKey('video_last_frame_page')) {
+      context.handle(
+        _videoLastFramePageMeta,
+        videoLastFramePage.isAcceptableOrUnknown(
+          data['video_last_frame_page']!,
+          _videoLastFramePageMeta,
+        ),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -634,6 +714,22 @@ class $DocumentsTable extends Documents
         DriftSqlType.double,
         data['${effectivePrefix}last_read_alignment'],
       ),
+      videoUri: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}video_uri'],
+      ),
+      videoSandboxPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}video_sandbox_path'],
+      ),
+      videoDurationSec: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}video_duration_sec'],
+      ),
+      videoLastFramePage: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}video_last_frame_page'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -673,6 +769,18 @@ class Document extends DataClass implements Insertable<Document> {
 
   /// Viewport alignment of the anchor row (`itemLeadingEdge`, 0.0…1.0).
   final double? lastReadAlignment;
+
+  /// Durable platform ref / bookmark for attached video (`reader/video-frames`).
+  final String? videoUri;
+
+  /// Optional sandbox filesystem path for extract (native content:// copy).
+  final String? videoSandboxPath;
+
+  /// Probed duration in whole seconds (pagination); null when no video.
+  final int? videoDurationSec;
+
+  /// Optional last viewed frame-strip page (1-based).
+  final int? videoLastFramePage;
   final DateTime createdAt;
   final DateTime updatedAt;
   const Document({
@@ -685,6 +793,10 @@ class Document extends DataClass implements Insertable<Document> {
     this.translationDocumentId,
     this.lastReadStartMs,
     this.lastReadAlignment,
+    this.videoUri,
+    this.videoSandboxPath,
+    this.videoDurationSec,
+    this.videoLastFramePage,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -709,6 +821,18 @@ class Document extends DataClass implements Insertable<Document> {
     }
     if (!nullToAbsent || lastReadAlignment != null) {
       map['last_read_alignment'] = Variable<double>(lastReadAlignment);
+    }
+    if (!nullToAbsent || videoUri != null) {
+      map['video_uri'] = Variable<String>(videoUri);
+    }
+    if (!nullToAbsent || videoSandboxPath != null) {
+      map['video_sandbox_path'] = Variable<String>(videoSandboxPath);
+    }
+    if (!nullToAbsent || videoDurationSec != null) {
+      map['video_duration_sec'] = Variable<int>(videoDurationSec);
+    }
+    if (!nullToAbsent || videoLastFramePage != null) {
+      map['video_last_frame_page'] = Variable<int>(videoLastFramePage);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
@@ -736,6 +860,18 @@ class Document extends DataClass implements Insertable<Document> {
       lastReadAlignment: lastReadAlignment == null && nullToAbsent
           ? const Value.absent()
           : Value(lastReadAlignment),
+      videoUri: videoUri == null && nullToAbsent
+          ? const Value.absent()
+          : Value(videoUri),
+      videoSandboxPath: videoSandboxPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(videoSandboxPath),
+      videoDurationSec: videoDurationSec == null && nullToAbsent
+          ? const Value.absent()
+          : Value(videoDurationSec),
+      videoLastFramePage: videoLastFramePage == null && nullToAbsent
+          ? const Value.absent()
+          : Value(videoLastFramePage),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -760,6 +896,10 @@ class Document extends DataClass implements Insertable<Document> {
       lastReadAlignment: serializer.fromJson<double?>(
         json['lastReadAlignment'],
       ),
+      videoUri: serializer.fromJson<String?>(json['videoUri']),
+      videoSandboxPath: serializer.fromJson<String?>(json['videoSandboxPath']),
+      videoDurationSec: serializer.fromJson<int?>(json['videoDurationSec']),
+      videoLastFramePage: serializer.fromJson<int?>(json['videoLastFramePage']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -777,6 +917,10 @@ class Document extends DataClass implements Insertable<Document> {
       'translationDocumentId': serializer.toJson<int?>(translationDocumentId),
       'lastReadStartMs': serializer.toJson<int?>(lastReadStartMs),
       'lastReadAlignment': serializer.toJson<double?>(lastReadAlignment),
+      'videoUri': serializer.toJson<String?>(videoUri),
+      'videoSandboxPath': serializer.toJson<String?>(videoSandboxPath),
+      'videoDurationSec': serializer.toJson<int?>(videoDurationSec),
+      'videoLastFramePage': serializer.toJson<int?>(videoLastFramePage),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -792,6 +936,10 @@ class Document extends DataClass implements Insertable<Document> {
     Value<int?> translationDocumentId = const Value.absent(),
     Value<int?> lastReadStartMs = const Value.absent(),
     Value<double?> lastReadAlignment = const Value.absent(),
+    Value<String?> videoUri = const Value.absent(),
+    Value<String?> videoSandboxPath = const Value.absent(),
+    Value<int?> videoDurationSec = const Value.absent(),
+    Value<int?> videoLastFramePage = const Value.absent(),
     DateTime? createdAt,
     DateTime? updatedAt,
   }) => Document(
@@ -810,6 +958,16 @@ class Document extends DataClass implements Insertable<Document> {
     lastReadAlignment: lastReadAlignment.present
         ? lastReadAlignment.value
         : this.lastReadAlignment,
+    videoUri: videoUri.present ? videoUri.value : this.videoUri,
+    videoSandboxPath: videoSandboxPath.present
+        ? videoSandboxPath.value
+        : this.videoSandboxPath,
+    videoDurationSec: videoDurationSec.present
+        ? videoDurationSec.value
+        : this.videoDurationSec,
+    videoLastFramePage: videoLastFramePage.present
+        ? videoLastFramePage.value
+        : this.videoLastFramePage,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -832,6 +990,16 @@ class Document extends DataClass implements Insertable<Document> {
       lastReadAlignment: data.lastReadAlignment.present
           ? data.lastReadAlignment.value
           : this.lastReadAlignment,
+      videoUri: data.videoUri.present ? data.videoUri.value : this.videoUri,
+      videoSandboxPath: data.videoSandboxPath.present
+          ? data.videoSandboxPath.value
+          : this.videoSandboxPath,
+      videoDurationSec: data.videoDurationSec.present
+          ? data.videoDurationSec.value
+          : this.videoDurationSec,
+      videoLastFramePage: data.videoLastFramePage.present
+          ? data.videoLastFramePage.value
+          : this.videoLastFramePage,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -849,6 +1017,10 @@ class Document extends DataClass implements Insertable<Document> {
           ..write('translationDocumentId: $translationDocumentId, ')
           ..write('lastReadStartMs: $lastReadStartMs, ')
           ..write('lastReadAlignment: $lastReadAlignment, ')
+          ..write('videoUri: $videoUri, ')
+          ..write('videoSandboxPath: $videoSandboxPath, ')
+          ..write('videoDurationSec: $videoDurationSec, ')
+          ..write('videoLastFramePage: $videoLastFramePage, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -866,6 +1038,10 @@ class Document extends DataClass implements Insertable<Document> {
     translationDocumentId,
     lastReadStartMs,
     lastReadAlignment,
+    videoUri,
+    videoSandboxPath,
+    videoDurationSec,
+    videoLastFramePage,
     createdAt,
     updatedAt,
   );
@@ -882,6 +1058,10 @@ class Document extends DataClass implements Insertable<Document> {
           other.translationDocumentId == this.translationDocumentId &&
           other.lastReadStartMs == this.lastReadStartMs &&
           other.lastReadAlignment == this.lastReadAlignment &&
+          other.videoUri == this.videoUri &&
+          other.videoSandboxPath == this.videoSandboxPath &&
+          other.videoDurationSec == this.videoDurationSec &&
+          other.videoLastFramePage == this.videoLastFramePage &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -896,6 +1076,10 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
   final Value<int?> translationDocumentId;
   final Value<int?> lastReadStartMs;
   final Value<double?> lastReadAlignment;
+  final Value<String?> videoUri;
+  final Value<String?> videoSandboxPath;
+  final Value<int?> videoDurationSec;
+  final Value<int?> videoLastFramePage;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   const DocumentsCompanion({
@@ -908,6 +1092,10 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.translationDocumentId = const Value.absent(),
     this.lastReadStartMs = const Value.absent(),
     this.lastReadAlignment = const Value.absent(),
+    this.videoUri = const Value.absent(),
+    this.videoSandboxPath = const Value.absent(),
+    this.videoDurationSec = const Value.absent(),
+    this.videoLastFramePage = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
   });
@@ -921,6 +1109,10 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.translationDocumentId = const Value.absent(),
     this.lastReadStartMs = const Value.absent(),
     this.lastReadAlignment = const Value.absent(),
+    this.videoUri = const Value.absent(),
+    this.videoSandboxPath = const Value.absent(),
+    this.videoDurationSec = const Value.absent(),
+    this.videoLastFramePage = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
   }) : folderId = Value(folderId),
@@ -936,6 +1128,10 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Expression<int>? translationDocumentId,
     Expression<int>? lastReadStartMs,
     Expression<double>? lastReadAlignment,
+    Expression<String>? videoUri,
+    Expression<String>? videoSandboxPath,
+    Expression<int>? videoDurationSec,
+    Expression<int>? videoLastFramePage,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
   }) {
@@ -950,6 +1146,11 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
         'translation_document_id': translationDocumentId,
       if (lastReadStartMs != null) 'last_read_start_ms': lastReadStartMs,
       if (lastReadAlignment != null) 'last_read_alignment': lastReadAlignment,
+      if (videoUri != null) 'video_uri': videoUri,
+      if (videoSandboxPath != null) 'video_sandbox_path': videoSandboxPath,
+      if (videoDurationSec != null) 'video_duration_sec': videoDurationSec,
+      if (videoLastFramePage != null)
+        'video_last_frame_page': videoLastFramePage,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
     });
@@ -965,6 +1166,10 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Value<int?>? translationDocumentId,
     Value<int?>? lastReadStartMs,
     Value<double?>? lastReadAlignment,
+    Value<String?>? videoUri,
+    Value<String?>? videoSandboxPath,
+    Value<int?>? videoDurationSec,
+    Value<int?>? videoLastFramePage,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
   }) {
@@ -979,6 +1184,10 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
           translationDocumentId ?? this.translationDocumentId,
       lastReadStartMs: lastReadStartMs ?? this.lastReadStartMs,
       lastReadAlignment: lastReadAlignment ?? this.lastReadAlignment,
+      videoUri: videoUri ?? this.videoUri,
+      videoSandboxPath: videoSandboxPath ?? this.videoSandboxPath,
+      videoDurationSec: videoDurationSec ?? this.videoDurationSec,
+      videoLastFramePage: videoLastFramePage ?? this.videoLastFramePage,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -1016,6 +1225,18 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     if (lastReadAlignment.present) {
       map['last_read_alignment'] = Variable<double>(lastReadAlignment.value);
     }
+    if (videoUri.present) {
+      map['video_uri'] = Variable<String>(videoUri.value);
+    }
+    if (videoSandboxPath.present) {
+      map['video_sandbox_path'] = Variable<String>(videoSandboxPath.value);
+    }
+    if (videoDurationSec.present) {
+      map['video_duration_sec'] = Variable<int>(videoDurationSec.value);
+    }
+    if (videoLastFramePage.present) {
+      map['video_last_frame_page'] = Variable<int>(videoLastFramePage.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -1037,6 +1258,10 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
           ..write('translationDocumentId: $translationDocumentId, ')
           ..write('lastReadStartMs: $lastReadStartMs, ')
           ..write('lastReadAlignment: $lastReadAlignment, ')
+          ..write('videoUri: $videoUri, ')
+          ..write('videoSandboxPath: $videoSandboxPath, ')
+          ..write('videoDurationSec: $videoDurationSec, ')
+          ..write('videoLastFramePage: $videoLastFramePage, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -1504,6 +1729,282 @@ class DictionaryEntriesCompanion extends UpdateCompanion<DictionaryEntry> {
   }
 }
 
+class $DocumentVideoFramesTable extends DocumentVideoFrames
+    with TableInfo<$DocumentVideoFramesTable, DocumentVideoFrame> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $DocumentVideoFramesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _documentIdMeta = const VerificationMeta(
+    'documentId',
+  );
+  @override
+  late final GeneratedColumn<int> documentId = GeneratedColumn<int>(
+    'document_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES documents (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _secondMeta = const VerificationMeta('second');
+  @override
+  late final GeneratedColumn<int> second = GeneratedColumn<int>(
+    'second',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _jpegBytesMeta = const VerificationMeta(
+    'jpegBytes',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> jpegBytes = GeneratedColumn<Uint8List>(
+    'jpeg_bytes',
+    aliasedName,
+    false,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [documentId, second, jpegBytes];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'document_video_frames';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<DocumentVideoFrame> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('document_id')) {
+      context.handle(
+        _documentIdMeta,
+        documentId.isAcceptableOrUnknown(data['document_id']!, _documentIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_documentIdMeta);
+    }
+    if (data.containsKey('second')) {
+      context.handle(
+        _secondMeta,
+        second.isAcceptableOrUnknown(data['second']!, _secondMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_secondMeta);
+    }
+    if (data.containsKey('jpeg_bytes')) {
+      context.handle(
+        _jpegBytesMeta,
+        jpegBytes.isAcceptableOrUnknown(data['jpeg_bytes']!, _jpegBytesMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_jpegBytesMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {documentId, second};
+  @override
+  DocumentVideoFrame map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return DocumentVideoFrame(
+      documentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}document_id'],
+      )!,
+      second: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}second'],
+      )!,
+      jpegBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}jpeg_bytes'],
+      )!,
+    );
+  }
+
+  @override
+  $DocumentVideoFramesTable createAlias(String alias) {
+    return $DocumentVideoFramesTable(attachedDatabase, alias);
+  }
+}
+
+class DocumentVideoFrame extends DataClass
+    implements Insertable<DocumentVideoFrame> {
+  final int documentId;
+
+  /// Whole-second index (0-based) within the attached video.
+  final int second;
+  final Uint8List jpegBytes;
+  const DocumentVideoFrame({
+    required this.documentId,
+    required this.second,
+    required this.jpegBytes,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['document_id'] = Variable<int>(documentId);
+    map['second'] = Variable<int>(second);
+    map['jpeg_bytes'] = Variable<Uint8List>(jpegBytes);
+    return map;
+  }
+
+  DocumentVideoFramesCompanion toCompanion(bool nullToAbsent) {
+    return DocumentVideoFramesCompanion(
+      documentId: Value(documentId),
+      second: Value(second),
+      jpegBytes: Value(jpegBytes),
+    );
+  }
+
+  factory DocumentVideoFrame.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return DocumentVideoFrame(
+      documentId: serializer.fromJson<int>(json['documentId']),
+      second: serializer.fromJson<int>(json['second']),
+      jpegBytes: serializer.fromJson<Uint8List>(json['jpegBytes']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'documentId': serializer.toJson<int>(documentId),
+      'second': serializer.toJson<int>(second),
+      'jpegBytes': serializer.toJson<Uint8List>(jpegBytes),
+    };
+  }
+
+  DocumentVideoFrame copyWith({
+    int? documentId,
+    int? second,
+    Uint8List? jpegBytes,
+  }) => DocumentVideoFrame(
+    documentId: documentId ?? this.documentId,
+    second: second ?? this.second,
+    jpegBytes: jpegBytes ?? this.jpegBytes,
+  );
+  DocumentVideoFrame copyWithCompanion(DocumentVideoFramesCompanion data) {
+    return DocumentVideoFrame(
+      documentId: data.documentId.present
+          ? data.documentId.value
+          : this.documentId,
+      second: data.second.present ? data.second.value : this.second,
+      jpegBytes: data.jpegBytes.present ? data.jpegBytes.value : this.jpegBytes,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DocumentVideoFrame(')
+          ..write('documentId: $documentId, ')
+          ..write('second: $second, ')
+          ..write('jpegBytes: $jpegBytes')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(documentId, second, $driftBlobEquality.hash(jpegBytes));
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is DocumentVideoFrame &&
+          other.documentId == this.documentId &&
+          other.second == this.second &&
+          $driftBlobEquality.equals(other.jpegBytes, this.jpegBytes));
+}
+
+class DocumentVideoFramesCompanion extends UpdateCompanion<DocumentVideoFrame> {
+  final Value<int> documentId;
+  final Value<int> second;
+  final Value<Uint8List> jpegBytes;
+  final Value<int> rowid;
+  const DocumentVideoFramesCompanion({
+    this.documentId = const Value.absent(),
+    this.second = const Value.absent(),
+    this.jpegBytes = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  DocumentVideoFramesCompanion.insert({
+    required int documentId,
+    required int second,
+    required Uint8List jpegBytes,
+    this.rowid = const Value.absent(),
+  }) : documentId = Value(documentId),
+       second = Value(second),
+       jpegBytes = Value(jpegBytes);
+  static Insertable<DocumentVideoFrame> custom({
+    Expression<int>? documentId,
+    Expression<int>? second,
+    Expression<Uint8List>? jpegBytes,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (documentId != null) 'document_id': documentId,
+      if (second != null) 'second': second,
+      if (jpegBytes != null) 'jpeg_bytes': jpegBytes,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  DocumentVideoFramesCompanion copyWith({
+    Value<int>? documentId,
+    Value<int>? second,
+    Value<Uint8List>? jpegBytes,
+    Value<int>? rowid,
+  }) {
+    return DocumentVideoFramesCompanion(
+      documentId: documentId ?? this.documentId,
+      second: second ?? this.second,
+      jpegBytes: jpegBytes ?? this.jpegBytes,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (documentId.present) {
+      map['document_id'] = Variable<int>(documentId.value);
+    }
+    if (second.present) {
+      map['second'] = Variable<int>(second.value);
+    }
+    if (jpegBytes.present) {
+      map['jpeg_bytes'] = Variable<Uint8List>(jpegBytes.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DocumentVideoFramesCompanion(')
+          ..write('documentId: $documentId, ')
+          ..write('second: $second, ')
+          ..write('jpegBytes: $jpegBytes, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1511,6 +2012,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $DocumentsTable documents = $DocumentsTable(this);
   late final $DictionaryEntriesTable dictionaryEntries =
       $DictionaryEntriesTable(this);
+  late final $DocumentVideoFramesTable documentVideoFrames =
+      $DocumentVideoFramesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1519,7 +2022,18 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     folders,
     documents,
     dictionaryEntries,
+    documentVideoFrames,
   ];
+  @override
+  StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'documents',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('document_video_frames', kind: UpdateKind.delete)],
+    ),
+  ]);
 }
 
 typedef $$FoldersTableCreateCompanionBuilder = FoldersCompanion Function({
@@ -1919,6 +2433,10 @@ typedef $$DocumentsTableCreateCompanionBuilder = DocumentsCompanion Function({
   Value<int?> translationDocumentId,
   Value<int?> lastReadStartMs,
   Value<double?> lastReadAlignment,
+  Value<String?> videoUri,
+  Value<String?> videoSandboxPath,
+  Value<int?> videoDurationSec,
+  Value<int?> videoLastFramePage,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
 });
@@ -1932,6 +2450,10 @@ typedef $$DocumentsTableUpdateCompanionBuilder = DocumentsCompanion Function({
   Value<int?> translationDocumentId,
   Value<int?> lastReadStartMs,
   Value<double?> lastReadAlignment,
+  Value<String?> videoUri,
+  Value<String?> videoSandboxPath,
+  Value<int?> videoDurationSec,
+  Value<int?> videoLastFramePage,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
 });
@@ -1974,6 +2496,30 @@ final class $$DocumentsTableReferences
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static MultiTypedResultKey<
+    $DocumentVideoFramesTable,
+    List<DocumentVideoFrame>
+  >
+  _documentVideoFramesRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.documentVideoFrames,
+        aliasName: 'documents__id__document_video_frames__document_id',
+      );
+
+  $$DocumentVideoFramesTableProcessedTableManager get documentVideoFramesRefs {
+    final manager = $$DocumentVideoFramesTableTableManager(
+      $_db,
+      $_db.documentVideoFrames,
+    ).filter((f) => f.documentId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _documentVideoFramesRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
     );
   }
 }
@@ -2019,6 +2565,26 @@ class $$DocumentsTableFilterComposer
 
   ColumnFilters<double> get lastReadAlignment => $composableBuilder(
     column: $table.lastReadAlignment,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get videoUri => $composableBuilder(
+    column: $table.videoUri,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get videoSandboxPath => $composableBuilder(
+    column: $table.videoSandboxPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get videoDurationSec => $composableBuilder(
+    column: $table.videoDurationSec,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get videoLastFramePage => $composableBuilder(
+    column: $table.videoLastFramePage,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2077,6 +2643,31 @@ class $$DocumentsTableFilterComposer
     );
     return composer;
   }
+
+  Expression<bool> documentVideoFramesRefs(
+    Expression<bool> Function($$DocumentVideoFramesTableFilterComposer f) f,
+  ) {
+    final $$DocumentVideoFramesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.documentVideoFrames,
+      getReferencedColumn: (t) => t.documentId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentVideoFramesTableFilterComposer(
+            $db: $db,
+            $table: $db.documentVideoFrames,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$DocumentsTableOrderingComposer
@@ -2120,6 +2711,26 @@ class $$DocumentsTableOrderingComposer
 
   ColumnOrderings<double> get lastReadAlignment => $composableBuilder(
     column: $table.lastReadAlignment,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get videoUri => $composableBuilder(
+    column: $table.videoUri,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get videoSandboxPath => $composableBuilder(
+    column: $table.videoSandboxPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get videoDurationSec => $composableBuilder(
+    column: $table.videoDurationSec,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get videoLastFramePage => $composableBuilder(
+    column: $table.videoLastFramePage,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -2216,6 +2827,24 @@ class $$DocumentsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get videoUri =>
+      $composableBuilder(column: $table.videoUri, builder: (column) => column);
+
+  GeneratedColumn<String> get videoSandboxPath => $composableBuilder(
+    column: $table.videoSandboxPath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get videoDurationSec => $composableBuilder(
+    column: $table.videoDurationSec,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get videoLastFramePage => $composableBuilder(
+    column: $table.videoLastFramePage,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 
@@ -2267,6 +2896,32 @@ class $$DocumentsTableAnnotationComposer
     );
     return composer;
   }
+
+  Expression<T> documentVideoFramesRefs<T extends Object>(
+    Expression<T> Function($$DocumentVideoFramesTableAnnotationComposer a) f,
+  ) {
+    final $$DocumentVideoFramesTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.documentVideoFrames,
+          getReferencedColumn: (t) => t.documentId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$DocumentVideoFramesTableAnnotationComposer(
+                $db: $db,
+                $table: $db.documentVideoFrames,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
 }
 
 class $$DocumentsTableTableManager
@@ -2282,7 +2937,11 @@ class $$DocumentsTableTableManager
           $$DocumentsTableUpdateCompanionBuilder,
           (Document, $$DocumentsTableReferences),
           Document,
-          PrefetchHooks Function({bool folderId, bool translationDocumentId})
+          PrefetchHooks Function({
+            bool folderId,
+            bool translationDocumentId,
+            bool documentVideoFramesRefs,
+          })
         > {
   $$DocumentsTableTableManager(_$AppDatabase db, $DocumentsTable table)
     : super(
@@ -2306,6 +2965,10 @@ class $$DocumentsTableTableManager
                 Value<int?> translationDocumentId = const Value.absent(),
                 Value<int?> lastReadStartMs = const Value.absent(),
                 Value<double?> lastReadAlignment = const Value.absent(),
+                Value<String?> videoUri = const Value.absent(),
+                Value<String?> videoSandboxPath = const Value.absent(),
+                Value<int?> videoDurationSec = const Value.absent(),
+                Value<int?> videoLastFramePage = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
               }) => DocumentsCompanion(
@@ -2318,6 +2981,10 @@ class $$DocumentsTableTableManager
                 translationDocumentId: translationDocumentId,
                 lastReadStartMs: lastReadStartMs,
                 lastReadAlignment: lastReadAlignment,
+                videoUri: videoUri,
+                videoSandboxPath: videoSandboxPath,
+                videoDurationSec: videoDurationSec,
+                videoLastFramePage: videoLastFramePage,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
               ),
@@ -2332,6 +2999,10 @@ class $$DocumentsTableTableManager
                 Value<int?> translationDocumentId = const Value.absent(),
                 Value<int?> lastReadStartMs = const Value.absent(),
                 Value<double?> lastReadAlignment = const Value.absent(),
+                Value<String?> videoUri = const Value.absent(),
+                Value<String?> videoSandboxPath = const Value.absent(),
+                Value<int?> videoDurationSec = const Value.absent(),
+                Value<int?> videoLastFramePage = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
               }) => DocumentsCompanion.insert(
@@ -2344,6 +3015,10 @@ class $$DocumentsTableTableManager
                 translationDocumentId: translationDocumentId,
                 lastReadStartMs: lastReadStartMs,
                 lastReadAlignment: lastReadAlignment,
+                videoUri: videoUri,
+                videoSandboxPath: videoSandboxPath,
+                videoDurationSec: videoDurationSec,
+                videoLastFramePage: videoLastFramePage,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
               ),
@@ -2356,10 +3031,16 @@ class $$DocumentsTableTableManager
               )
               .toList(),
           prefetchHooksCallback:
-              ({folderId = false, translationDocumentId = false}) {
+              ({
+                folderId = false,
+                translationDocumentId = false,
+                documentVideoFramesRefs = false,
+              }) {
                 return PrefetchHooks(
                   db: db,
-                  explicitlyWatchedTables: [],
+                  explicitlyWatchedTables: [
+                    if (documentVideoFramesRefs) db.documentVideoFrames,
+                  ],
                   addJoins:
                       <
                         T extends TableManagerState<
@@ -2402,7 +3083,29 @@ class $$DocumentsTableTableManager
                         return state;
                       },
                   getPrefetchedDataCallback: (items) async {
-                    return [];
+                    return [
+                      if (documentVideoFramesRefs)
+                        await $_getPrefetchedData<
+                          Document,
+                          $DocumentsTable,
+                          DocumentVideoFrame
+                        >(
+                          currentTable: table,
+                          referencedTable: $$DocumentsTableReferences
+                              ._documentVideoFramesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$DocumentsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).documentVideoFramesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.documentId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
                   },
                 );
               },
@@ -2422,7 +3125,11 @@ typedef $$DocumentsTableProcessedTableManager =
       $$DocumentsTableUpdateCompanionBuilder,
       (Document, $$DocumentsTableReferences),
       Document,
-      PrefetchHooks Function({bool folderId, bool translationDocumentId})
+      PrefetchHooks Function({
+        bool folderId,
+        bool translationDocumentId,
+        bool documentVideoFramesRefs,
+      })
     >;
 typedef $$DictionaryEntriesTableCreateCompanionBuilder =
     DictionaryEntriesCompanion Function({
@@ -2678,6 +3385,302 @@ typedef $$DictionaryEntriesTableProcessedTableManager =
       DictionaryEntry,
       PrefetchHooks Function()
     >;
+typedef $$DocumentVideoFramesTableCreateCompanionBuilder =
+    DocumentVideoFramesCompanion Function({
+      required int documentId,
+      required int second,
+      required Uint8List jpegBytes,
+      Value<int> rowid,
+    });
+typedef $$DocumentVideoFramesTableUpdateCompanionBuilder =
+    DocumentVideoFramesCompanion Function({
+      Value<int> documentId,
+      Value<int> second,
+      Value<Uint8List> jpegBytes,
+      Value<int> rowid,
+    });
+
+final class $$DocumentVideoFramesTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $DocumentVideoFramesTable,
+          DocumentVideoFrame
+        > {
+  $$DocumentVideoFramesTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $DocumentsTable _documentIdTable(_$AppDatabase db) => db.documents
+      .createAlias('document_video_frames__document_id__documents__id');
+
+  $$DocumentsTableProcessedTableManager get documentId {
+    final $_column = $_itemColumn<int>('document_id')!;
+
+    final manager = $$DocumentsTableTableManager(
+      $_db,
+      $_db.documents,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_documentIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$DocumentVideoFramesTableFilterComposer
+    extends Composer<_$AppDatabase, $DocumentVideoFramesTable> {
+  $$DocumentVideoFramesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get second => $composableBuilder(
+    column: $table.second,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get jpegBytes => $composableBuilder(
+    column: $table.jpegBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$DocumentsTableFilterComposer get documentId {
+    final $$DocumentsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.documentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableFilterComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DocumentVideoFramesTableOrderingComposer
+    extends Composer<_$AppDatabase, $DocumentVideoFramesTable> {
+  $$DocumentVideoFramesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get second => $composableBuilder(
+    column: $table.second,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get jpegBytes => $composableBuilder(
+    column: $table.jpegBytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$DocumentsTableOrderingComposer get documentId {
+    final $$DocumentsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.documentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableOrderingComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DocumentVideoFramesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $DocumentVideoFramesTable> {
+  $$DocumentVideoFramesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get second =>
+      $composableBuilder(column: $table.second, builder: (column) => column);
+
+  GeneratedColumn<Uint8List> get jpegBytes =>
+      $composableBuilder(column: $table.jpegBytes, builder: (column) => column);
+
+  $$DocumentsTableAnnotationComposer get documentId {
+    final $$DocumentsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.documentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DocumentVideoFramesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $DocumentVideoFramesTable,
+          DocumentVideoFrame,
+          $$DocumentVideoFramesTableFilterComposer,
+          $$DocumentVideoFramesTableOrderingComposer,
+          $$DocumentVideoFramesTableAnnotationComposer,
+          $$DocumentVideoFramesTableCreateCompanionBuilder,
+          $$DocumentVideoFramesTableUpdateCompanionBuilder,
+          (DocumentVideoFrame, $$DocumentVideoFramesTableReferences),
+          DocumentVideoFrame,
+          PrefetchHooks Function({bool documentId})
+        > {
+  $$DocumentVideoFramesTableTableManager(
+    _$AppDatabase db,
+    $DocumentVideoFramesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$DocumentVideoFramesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$DocumentVideoFramesTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$DocumentVideoFramesTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> documentId = const Value.absent(),
+                Value<int> second = const Value.absent(),
+                Value<Uint8List> jpegBytes = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => DocumentVideoFramesCompanion(
+                documentId: documentId,
+                second: second,
+                jpegBytes: jpegBytes,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required int documentId,
+                required int second,
+                required Uint8List jpegBytes,
+                Value<int> rowid = const Value.absent(),
+              }) => DocumentVideoFramesCompanion.insert(
+                documentId: documentId,
+                second: second,
+                jpegBytes: jpegBytes,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$DocumentVideoFramesTable, DocumentVideoFrame>(
+                    table,
+                  ),
+                  $$DocumentVideoFramesTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({documentId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (documentId) {
+                      state = state.withJoin(
+                        currentTable: table,
+                        currentColumn: table.documentId,
+                        referencedTable: $$DocumentVideoFramesTableReferences
+                            ._documentIdTable(db),
+                        referencedColumn: $$DocumentVideoFramesTableReferences
+                            ._documentIdTable(db)
+                            .id,
+                      ) as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$DocumentVideoFramesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $DocumentVideoFramesTable,
+      DocumentVideoFrame,
+      $$DocumentVideoFramesTableFilterComposer,
+      $$DocumentVideoFramesTableOrderingComposer,
+      $$DocumentVideoFramesTableAnnotationComposer,
+      $$DocumentVideoFramesTableCreateCompanionBuilder,
+      $$DocumentVideoFramesTableUpdateCompanionBuilder,
+      (DocumentVideoFrame, $$DocumentVideoFramesTableReferences),
+      DocumentVideoFrame,
+      PrefetchHooks Function({bool documentId})
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2688,4 +3691,6 @@ class $AppDatabaseManager {
       $$DocumentsTableTableManager(_db, _db.documents);
   $$DictionaryEntriesTableTableManager get dictionaryEntries =>
       $$DictionaryEntriesTableTableManager(_db, _db.dictionaryEntries);
+  $$DocumentVideoFramesTableTableManager get documentVideoFrames =>
+      $$DocumentVideoFramesTableTableManager(_db, _db.documentVideoFrames);
 }

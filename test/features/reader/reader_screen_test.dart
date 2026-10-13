@@ -12,14 +12,31 @@ import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
 import 'package:my_translator_app/data/translate/offline_translate.dart';
+import 'package:my_translator_app/data/video/reader_video_picker.dart';
+import 'package:my_translator_app/data/video/video_frame_errors.dart';
+import 'package:my_translator_app/data/video/video_frame_extractor.dart';
+import 'package:my_translator_app/data/video/video_usable_path.dart';
 import 'package:my_translator_app/features/reader/cue_time_format.dart';
 import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
 import 'package:my_translator_app/features/reader/reader_screen.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
+import 'package:my_translator_app/features/reader/video_frame_cache.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart';
 import 'package:my_translator_app/src/rust/api/tokenize.dart';
 
 import '../../support/test_database.dart';
+
+/// Valid 1×1 JPEG so [Image.memory] does not fall through to errorBuilder.
+final Uint8List _tinyJpeg = Uint8List.fromList(
+  base64Decode(
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkS'
+    'Ew8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJ'
+    'CQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy'
+    'MjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAA'
+    'AAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAA'
+    'AAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAA8A/9k=',
+  ),
+);
 
 Uint8List _srtBytes([String text = 'Hi']) =>
     Uint8List.fromList(utf8.encode('1\n00:00:01,000 --> 00:00:02,000\n$text\n'));
@@ -206,11 +223,16 @@ void main() {
   List<CueDto>? pumpTranslationCues;
   int? pumpTranslationDocumentId;
   ReadingAnchor? pumpInitialReadingAnchor;
+  VideoAttachment? pumpInitialVideoAttachment;
   ParseSubtitlesFn? pumpParse;
   TokenizeCuesFn? pumpTokenize;
   MarkVocabTokensFn? pumpMark;
   ReaderTranslationPicker? pumpPicker;
   OfflineTranslateFn? pumpOfflineTranslate;
+  ReaderVideoPicker? pumpVideoPicker;
+  FakeVideoFrameExtractor? pumpVideoExtractor;
+  VideoFrameCache? pumpVideoCache;
+  ResolveUsableVideoPathFn? pumpResolveVideoPath;
 
   setUp(() {
     store = MemoryDocumentContentStore();
@@ -223,11 +245,16 @@ void main() {
     pumpTranslationCues = null;
     pumpTranslationDocumentId = null;
     pumpInitialReadingAnchor = null;
+    pumpInitialVideoAttachment = null;
     pumpParse = null;
     pumpTokenize = _emptyTokenize;
     pumpMark = _fakeMarkVocabTokens;
     pumpPicker = null;
     pumpOfflineTranslate = null;
+    pumpVideoPicker = null;
+    pumpVideoExtractor = null;
+    pumpVideoCache = null;
+    pumpResolveVideoPath = null;
   });
 
   tearDown(() async {
@@ -259,16 +286,42 @@ void main() {
           translationCues: pumpTranslationCues,
           translationDocumentId: pumpTranslationDocumentId,
           initialReadingAnchor: pumpInitialReadingAnchor,
+          initialVideoAttachment: pumpInitialVideoAttachment,
           parseSubtitles: pumpParse,
           tokenizeCues: pumpTokenize,
           markVocabTokens: pumpMark,
           filePicker: pumpPicker,
           offlineTranslate: pumpOfflineTranslate,
+          videoPicker: pumpVideoPicker,
+          videoFrameExtractor: pumpVideoExtractor,
+          videoFrameCache: pumpVideoCache,
+          resolveUsableVideoPath: pumpResolveVideoPath,
         ),
       ),
     );
     // Allow batch tokenize+mark (injectable) to settle without FRB.
     await tester.pump();
+  }
+
+  void wireFakeVideo({
+    Duration duration = const Duration(seconds: 9),
+    Object? probeError,
+  }) {
+    pumpVideoExtractor = FakeVideoFrameExtractor(
+      duration: duration,
+      jpegBytes: _tinyJpeg,
+      probeError: probeError,
+    );
+    pumpVideoCache = MemoryVideoFrameCache();
+    pumpResolveVideoPath = (source, {documentId}) async => UsableVideoPath(
+          filesystemPath: source.pickerPath ?? '/tmp/test.mp4',
+          originalUri: source.originalUri ?? source.pickerPath,
+        );
+    pumpVideoPicker = () async => const PickedReaderVideo(
+          fileName: 'clip.mp4',
+          pickerPath: '/tmp/test.mp4',
+          originalUri: 'file:///tmp/test.mp4',
+        );
   }
 
   Future<Document> seedOriginal() async {
@@ -2136,4 +2189,270 @@ void main() {
     );
     expect(btn.onPressed, isNull);
   });
+
+  // --- reader/video-frames (VF-01, VF-03, VF-06…VF-09, VF-12) ---
+
+  testWidgets('VF-01: Load video shows frame strip', (tester) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    wireFakeVideo();
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('videoFrameStrip')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('readerLoadVideo')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('videoFrameStrip')), findsOneWidget);
+    expect(find.byKey(const Key('videoFrameStripCounter')), findsOneWidget);
+    expect(find.text('1 / 3'), findsOneWidget);
+    expect(await documents.getVideoAttachment(original.id), isNotNull);
+  });
+
+  testWidgets('VF-03: Pager advances and shows counter in Reader', (
+    tester,
+  ) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    wireFakeVideo();
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerLoadVideo')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('videoFrameStripNext')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 / 3'), findsOneWidget);
+  });
+
+  testWidgets('VF-06: Frame page change scrolls original cues', (tester) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    // Cue i starts at i*1000 ms → page 2 (first sec 3) → nearest cue 3.
+    pumpCues = _sampleCues(count: 40, startStepMs: 1000);
+    wireFakeVideo();
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerLoadVideo')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('videoFrameStripNext')));
+    await tester.pumpAndSettle();
+
+    final visible = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Cue line '))
+        .toList();
+    expect(visible, isNotEmpty);
+    final topIndex = int.parse(visible.first.replaceFirst('Cue line ', ''));
+    expect((topIndex - 3).abs(), lessThanOrEqualTo(2));
+  });
+
+  testWidgets(
+    'VF-07: Show split keeps strip page and syncs translation',
+    (tester) async {
+      final original = await seedOriginal();
+      pumpOriginalDocumentId = original.id;
+      pumpCues = _sampleCues(count: 40, startStepMs: 1000);
+      pumpTranslationCues = _sampleCues(
+        count: 40,
+        prefix: 'Tr',
+        startStepMs: 1000,
+      );
+      wireFakeVideo();
+      await pumpReader(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('readerLoadVideo')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('videoFrameStripNext')));
+      await tester.pumpAndSettle();
+      expect(find.text('2 / 3'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      // Strip page must survive Show split remount (D4 / VF-07).
+      expect(find.text('2 / 3'), findsOneWidget);
+      expect(find.byKey(const Key('videoFrameStrip')), findsOneWidget);
+      expect(find.byKey(const Key('readerOriginalCueList')), findsOneWidget);
+      expect(find.byKey(const Key('readerTranslationCueList')), findsOneWidget);
+    },
+  );
+
+  testWidgets('VF-08: Cue scroll does not move frame strip', (tester) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    pumpCues = _sampleCues(count: 40, startStepMs: 1000);
+    wireFakeVideo();
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerLoadVideo')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('videoFrameStripNext')));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 3'), findsOneWidget);
+
+    await tester.drag(
+      find.byKey(const Key('readerCueList')),
+      const Offset(0, -2500),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 / 3'), findsOneWidget);
+  });
+
+  testWidgets('VF-09: Remove video clears strip', (tester) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    wireFakeVideo();
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerLoadVideo')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('videoFrameStrip')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('readerRemoveVideo')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('videoFrameStrip')), findsNothing);
+    expect(find.byKey(const Key('readerRemoveVideo')), findsNothing);
+    expect(find.byKey(const Key('readerCueList')), findsOneWidget);
+    expect(await documents.getVideoAttachment(original.id), isNull);
+  });
+
+  testWidgets('VF-12: Tap and highlight still work with strip', (tester) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    wireFakeVideo();
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerLoadVideo')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('videoFrameStrip')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
+    expect(find.byKey(const Key('readerCueToken_0_0')), findsOneWidget);
+  });
+
+  testWidgets('VF-11: Failed probe shows error and no strip', (tester) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    wireFakeVideo(
+      probeError: const VideoFrameException(VideoFrameErrorKind.probeFailed),
+    );
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('readerLoadVideo')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('videoFrameStrip')), findsNothing);
+    expect(find.byKey(const Key('readerVideoErrorSnack')), findsOneWidget);
+  });
+
+  testWidgets(
+    'LD-19: Open with initialVideoAttachment restores strip',
+    (tester) async {
+      final original = await seedOriginal();
+      await documents.attachVideo(
+        documentId: original.id,
+        videoUri: 'file:///tmp/restored.mp4',
+        sandboxPath: '/tmp/restored.mp4',
+        durationSec: 9,
+        lastFramePage: 2,
+      );
+      pumpOriginalDocumentId = original.id;
+      pumpInitialVideoAttachment =
+          await documents.getVideoAttachment(original.id);
+      wireFakeVideo();
+      await pumpReader(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('videoFrameStrip')), findsOneWidget);
+      expect(find.text('2 / 3'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'LD-22: Dead link keeps cache; re-pick restores extract',
+    (tester) async {
+      final original = await seedOriginal();
+      await documents.attachVideo(
+        documentId: original.id,
+        videoUri: 'file:///gone/missing.mp4',
+        durationSec: 9,
+      );
+      await documents.putFrameCache(
+        documentId: original.id,
+        second: 0,
+        jpegBytes: _tinyJpeg,
+      );
+      pumpOriginalDocumentId = original.id;
+      pumpInitialVideoAttachment =
+          await documents.getVideoAttachment(original.id);
+      // Use Drift cache so cached second 0 survives without extract.
+      pumpVideoExtractor = FakeVideoFrameExtractor(
+        duration: const Duration(seconds: 9),
+        jpegBytes: _tinyJpeg,
+      );
+      pumpVideoCache = null;
+      pumpResolveVideoPath = (source, {documentId}) async => UsableVideoPath(
+            filesystemPath: source.pickerPath ?? '/tmp/repick.mp4',
+            originalUri: source.originalUri,
+          );
+      pumpVideoPicker = () async => const PickedReaderVideo(
+            fileName: 'repick.mp4',
+            pickerPath: '/tmp/repick.mp4',
+            originalUri: 'file:///tmp/repick.mp4',
+          );
+
+      await pumpReader(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('videoFrameStrip')), findsOneWidget);
+      expect(
+        await documents.getFrameCache(documentId: original.id, second: 0),
+        isNotNull,
+      );
+
+      await tester.tap(find.byKey(const Key('readerLoadVideo')));
+      await tester.pumpAndSettle();
+
+      final attachment = await documents.getVideoAttachment(original.id);
+      expect(attachment!.videoUri, 'file:///tmp/repick.mp4');
+      expect(find.byKey(const Key('videoFrameStrip')), findsOneWidget);
+      // Same duration re-pick must keep prior JPEG (LD-22).
+      expect(
+        await documents.getFrameCache(documentId: original.id, second: 0),
+        isNotNull,
+      );
+    },
+  );
 }

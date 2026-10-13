@@ -18,6 +18,28 @@ class ReadingAnchor {
   final double? alignment;
 }
 
+/// Persisted video attachment on an original document (`library/documents` LD-20).
+class VideoAttachment {
+  const VideoAttachment({
+    this.videoUri,
+    this.sandboxPath,
+    required this.durationSec,
+    this.lastFramePage,
+  });
+
+  /// Durable platform ref / bookmark (may become a dead link — LD-22).
+  final String? videoUri;
+
+  /// Optional sandbox extract path (native usable filesystem path).
+  final String? sandboxPath;
+
+  /// Probed duration in whole seconds (≥ 1 when strip is shown).
+  final int durationSec;
+
+  /// Optional last viewed frame-strip page (1-based).
+  final int? lastFramePage;
+}
+
 /// Drift-backed library documents (`library/documents`).
 class DocumentRepository {
   DocumentRepository(this._db, {required this.contentStore});
@@ -233,7 +255,146 @@ class DocumentRepository {
     );
   }
 
-  /// Deletes a document; cascades a linked hidden translation (LD-15).
+  /// Attaches (or replaces) video meta on the original (LD-20 / LD-23).
+  ///
+  /// Default [clearFrameCache] `true` replaces link/duration and clears prior
+  /// JPEG frames (LD-23). Pass `false` for dead-link re-pick so visited-second
+  /// JPEG remain usable (LD-22).
+  Future<void> attachVideo({
+    required int documentId,
+    String? videoUri,
+    String? sandboxPath,
+    required int durationSec,
+    int? lastFramePage,
+    bool clearFrameCache = true,
+  }) async {
+    final original = await getById(documentId);
+    if (original == null) {
+      throw LibraryValidationException('Document not found');
+    }
+    if (durationSec < 0) {
+      throw LibraryValidationException('Video duration must not be negative');
+    }
+
+    await _db.transaction(() async {
+      if (clearFrameCache) {
+        await _clearFrameCache(documentId);
+      }
+      await (_db.update(_db.documents)..where((d) => d.id.equals(documentId)))
+          .write(
+            DocumentsCompanion(
+              videoUri: Value(videoUri),
+              videoSandboxPath: Value(sandboxPath),
+              videoDurationSec: Value(durationSec),
+              videoLastFramePage: Value(lastFramePage),
+              updatedAt: Value(DateTime.now()),
+            ),
+          );
+    });
+  }
+
+  /// Persists optional strip page without touching JPEG cache (D7 last_frame_page).
+  Future<void> saveVideoLastFramePage({
+    required int documentId,
+    required int lastFramePage,
+  }) async {
+    final original = await getById(documentId);
+    if (original == null) {
+      throw LibraryValidationException('Document not found');
+    }
+    if (lastFramePage < 1) {
+      throw LibraryValidationException('Frame page must be ≥ 1');
+    }
+    if (original.videoDurationSec == null) {
+      return;
+    }
+    await (_db.update(_db.documents)..where((d) => d.id.equals(documentId)))
+        .write(
+          DocumentsCompanion(
+            videoLastFramePage: Value(lastFramePage),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+  }
+
+  /// Clears video link and JPEG frame cache; original remains (LD-21).
+  Future<void> detachVideo(int documentId) async {
+    final original = await getById(documentId);
+    if (original == null) {
+      throw LibraryValidationException('Document not found');
+    }
+
+    await _db.transaction(() async {
+      await _clearFrameCache(documentId);
+      await (_db.update(_db.documents)..where((d) => d.id.equals(documentId)))
+          .write(
+            DocumentsCompanion(
+              videoUri: const Value(null),
+              videoSandboxPath: const Value(null),
+              videoDurationSec: const Value(null),
+              videoLastFramePage: const Value(null),
+              updatedAt: Value(DateTime.now()),
+            ),
+          );
+    });
+  }
+
+  /// Returns saved video attachment meta, or null when none (LD-19 / LD-20).
+  ///
+  /// Does not validate that [VideoAttachment.videoUri] is still readable
+  /// (dead link keeps meta + cache — LD-22).
+  Future<VideoAttachment?> getVideoAttachment(int documentId) async {
+    final doc = await getById(documentId);
+    if (doc == null) return null;
+    final durationSec = doc.videoDurationSec;
+    if (durationSec == null) return null;
+    return VideoAttachment(
+      videoUri: doc.videoUri,
+      sandboxPath: doc.videoSandboxPath,
+      durationSec: durationSec,
+      lastFramePage: doc.videoLastFramePage,
+    );
+  }
+
+  /// Upserts a JPEG frame for [second] on [documentId] (LD-20).
+  Future<void> putFrameCache({
+    required int documentId,
+    required int second,
+    required Uint8List jpegBytes,
+  }) async {
+    if (second < 0) {
+      throw LibraryValidationException('Frame second must not be negative');
+    }
+    final original = await getById(documentId);
+    if (original == null) {
+      throw LibraryValidationException('Document not found');
+    }
+
+    await _db
+        .into(_db.documentVideoFrames)
+        .insertOnConflictUpdate(
+          DocumentVideoFramesCompanion.insert(
+            documentId: documentId,
+            second: second,
+            jpegBytes: jpegBytes,
+          ),
+        );
+  }
+
+  /// Loads a cached JPEG for [second], or null if missing (LD-20 / LD-22).
+  Future<Uint8List?> getFrameCache({
+    required int documentId,
+    required int second,
+  }) async {
+    final row =
+        await (_db.select(_db.documentVideoFrames)..where(
+              (f) => f.documentId.equals(documentId) & f.second.equals(second),
+            ))
+            .getSingleOrNull();
+    return row?.jpegBytes;
+  }
+
+  /// Deletes a document; cascades translation (LD-15) and video (LD-18).
   Future<void> deleteDocument(int documentId) async {
     final doc = await getById(documentId);
     if (doc == null) {
@@ -247,6 +408,8 @@ class DocumentRepository {
     }
 
     await _db.transaction(() async {
+      // LD-18: clear JPEG frame cache before removing the original row.
+      await _clearFrameCache(documentId);
       if (translationId != null) {
         await (_db.update(_db.documents)
               ..where((d) => d.id.equals(documentId)))
@@ -276,6 +439,12 @@ class DocumentRepository {
     if (translation != null) {
       await contentStore.delete(translation.storageKey);
     }
+  }
+
+  Future<void> _clearFrameCache(int documentId) async {
+    await (_db.delete(
+      _db.documentVideoFrames,
+    )..where((f) => f.documentId.equals(documentId))).go();
   }
 
   Future<List<int>> _hiddenTranslationIds() async {

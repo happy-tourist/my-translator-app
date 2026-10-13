@@ -82,4 +82,53 @@ void main() {
     expect(hit!.id, list.single.id);
     await db2.close();
   });
+
+  test('LD-20: Video attachment and frame cache survive close/reopen', () async {
+    final store = MemoryDocumentContentStore(storeAsContent: true);
+    final jpeg = Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9, 0x42]);
+
+    final db1 = createFileTestDatabase(dbFile);
+    final folders1 = FolderRepository(db1, contentStore: store);
+    final documents1 = DocumentRepository(db1, contentStore: store);
+    final folder = await folders1.createFolder(name: 'Season 1');
+    final original = await documents1.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    await documents1.attachVideo(
+      documentId: original.id,
+      videoUri: 'file:///videos/ep1.mp4',
+      sandboxPath: '/tmp/sandbox/ep1.mp4',
+      durationSec: 45,
+      lastFramePage: 3,
+    );
+    await documents1.putFrameCache(
+      documentId: original.id,
+      second: 2,
+      jpegBytes: jpeg,
+    );
+    final docId = original.id;
+    final folderId = folder.id;
+    await db1.close();
+
+    final db2 = createFileTestDatabase(dbFile);
+    final documents2 = DocumentRepository(
+      db2,
+      contentStore: MemoryDocumentContentStore(storeAsContent: true),
+    );
+    final attachment = await documents2.getVideoAttachment(docId);
+    expect(attachment, isNotNull);
+    expect(attachment!.videoUri, 'file:///videos/ep1.mp4');
+    expect(attachment.sandboxPath, '/tmp/sandbox/ep1.mp4');
+    expect(attachment.durationSec, 45);
+    expect(attachment.lastFramePage, 3);
+    expect(
+      await documents2.getFrameCache(documentId: docId, second: 2),
+      jpeg,
+    );
+    final listed = await documents2.listInFolder(folderId);
+    expect(listed, hasLength(1));
+    await db2.close();
+  });
 }

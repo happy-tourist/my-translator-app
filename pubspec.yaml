@@ -45,6 +45,13 @@ dependencies:
   sqlite3_flutter_libs: ^0.6.0+eol
   drift_flutter: ^0.3.1
   scrollable_positioned_list: ^0.3.8
+  # Video frame extract (OpenSpec add-reader-video-frames D3):
+  # ffmpeg-kit-next (arthenica) is not on pub.dev / no local Nix artifacts here →
+  # fallback pin: ffmpeg_kit_flutter_new_video (H.264/MKV-capable video pack, not full GPL).
+  # Do not mix a second native FFmpegKit package in the same build.
+  ffmpeg_kit_flutter_new_video: ^2.5.7
+  # Web canvas/video interop for WebCanvasFrameExtractor (D2); no WASM video crate.
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:

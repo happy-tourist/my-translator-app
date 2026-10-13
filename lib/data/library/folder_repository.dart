@@ -68,7 +68,15 @@ class FolderRepository {
         .whereType<String>()
         .toList();
 
+    final documentIds = docs.map((d) => d.id).toList();
+
     await _db.transaction(() async {
+      // Clear video JPEG cache before bulk document delete (LD-18 cascade).
+      if (documentIds.isNotEmpty) {
+        await (_db.delete(
+          _db.documentVideoFrames,
+        )..where((f) => f.documentId.isIn(documentIds))).go();
+      }
       // Clear self-FK links before bulk delete (translationDocumentId → Documents.id).
       await (_db.update(_db.documents)
             ..where((d) => d.folderId.isIn(subtreeIds)))

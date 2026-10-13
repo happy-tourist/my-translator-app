@@ -5,7 +5,9 @@ import 'tables.dart';
 
 part 'app_database.g.dart';
 
-@DriftDatabase(tables: [Folders, Documents, DictionaryEntries])
+@DriftDatabase(
+  tables: [Folders, Documents, DictionaryEntries, DocumentVideoFrames],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
@@ -13,7 +15,7 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.connect() => AppDatabase(_openConnection());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -34,6 +36,14 @@ class AppDatabase extends _$AppDatabase {
           dictionaryEntries,
           dictionaryEntries.surfaceKey,
         );
+      }
+      // Schema 5: video attachment meta on original + JPEG frame cache table.
+      if (from < 5) {
+        await migrator.addColumn(documents, documents.videoUri);
+        await migrator.addColumn(documents, documents.videoSandboxPath);
+        await migrator.addColumn(documents, documents.videoDurationSec);
+        await migrator.addColumn(documents, documents.videoLastFramePage);
+        await migrator.createTable(documentVideoFrames);
       }
     },
   );

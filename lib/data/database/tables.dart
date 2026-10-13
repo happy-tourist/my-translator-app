@@ -27,8 +27,30 @@ class Documents extends Table {
   IntColumn get lastReadStartMs => integer().nullable()();
   /// Viewport alignment of the anchor row (`itemLeadingEdge`, 0.0…1.0).
   RealColumn get lastReadAlignment => real().nullable()();
+  /// Durable platform ref / bookmark for attached video (`reader/video-frames`).
+  TextColumn get videoUri => text().nullable()();
+  /// Optional sandbox filesystem path for extract (native content:// copy).
+  TextColumn get videoSandboxPath => text().nullable()();
+  /// Probed duration in whole seconds (pagination); null when no video.
+  IntColumn get videoDurationSec => integer().nullable()();
+  /// Optional last viewed frame-strip page (1-based).
+  IntColumn get videoLastFramePage => integer().nullable()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+}
+
+/// JPEG frame cache for visited video seconds (`library/documents` LD-20).
+///
+/// Drift BLOB on all platforms (native + Web); keyed by document + second.
+class DocumentVideoFrames extends Table {
+  IntColumn get documentId =>
+      integer().references(Documents, #id, onDelete: KeyAction.cascade)();
+  /// Whole-second index (0-based) within the attached video.
+  IntColumn get second => integer()();
+  BlobColumn get jpegBytes => blob()();
+
+  @override
+  Set<Column> get primaryKey => {documentId, second};
 }
 
 /// Personal vocabulary (`dictionary/entries`).
