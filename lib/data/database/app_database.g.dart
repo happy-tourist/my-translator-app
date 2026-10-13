@@ -2005,6 +2005,267 @@ class DocumentVideoFramesCompanion extends UpdateCompanion<DocumentVideoFrame> {
   }
 }
 
+class $DocumentVideoMediaTable extends DocumentVideoMedia
+    with TableInfo<$DocumentVideoMediaTable, DocumentVideoMediaData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $DocumentVideoMediaTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _documentIdMeta = const VerificationMeta(
+    'documentId',
+  );
+  @override
+  late final GeneratedColumn<int> documentId = GeneratedColumn<int>(
+    'document_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES documents (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _bytesMeta = const VerificationMeta('bytes');
+  @override
+  late final GeneratedColumn<Uint8List> bytes = GeneratedColumn<Uint8List>(
+    'bytes',
+    aliasedName,
+    false,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _fileNameMeta = const VerificationMeta(
+    'fileName',
+  );
+  @override
+  late final GeneratedColumn<String> fileName = GeneratedColumn<String>(
+    'file_name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [documentId, bytes, fileName];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'document_video_media';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<DocumentVideoMediaData> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('document_id')) {
+      context.handle(
+        _documentIdMeta,
+        documentId.isAcceptableOrUnknown(data['document_id']!, _documentIdMeta),
+      );
+    }
+    if (data.containsKey('bytes')) {
+      context.handle(
+        _bytesMeta,
+        bytes.isAcceptableOrUnknown(data['bytes']!, _bytesMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_bytesMeta);
+    }
+    if (data.containsKey('file_name')) {
+      context.handle(
+        _fileNameMeta,
+        fileName.isAcceptableOrUnknown(data['file_name']!, _fileNameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fileNameMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {documentId};
+  @override
+  DocumentVideoMediaData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return DocumentVideoMediaData(
+      documentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}document_id'],
+      )!,
+      bytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}bytes'],
+      )!,
+      fileName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}file_name'],
+      )!,
+    );
+  }
+
+  @override
+  $DocumentVideoMediaTable createAlias(String alias) {
+    return $DocumentVideoMediaTable(attachedDatabase, alias);
+  }
+}
+
+class DocumentVideoMediaData extends DataClass
+    implements Insertable<DocumentVideoMediaData> {
+  final int documentId;
+  final Uint8List bytes;
+  final String fileName;
+  const DocumentVideoMediaData({
+    required this.documentId,
+    required this.bytes,
+    required this.fileName,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['document_id'] = Variable<int>(documentId);
+    map['bytes'] = Variable<Uint8List>(bytes);
+    map['file_name'] = Variable<String>(fileName);
+    return map;
+  }
+
+  DocumentVideoMediaCompanion toCompanion(bool nullToAbsent) {
+    return DocumentVideoMediaCompanion(
+      documentId: Value(documentId),
+      bytes: Value(bytes),
+      fileName: Value(fileName),
+    );
+  }
+
+  factory DocumentVideoMediaData.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return DocumentVideoMediaData(
+      documentId: serializer.fromJson<int>(json['documentId']),
+      bytes: serializer.fromJson<Uint8List>(json['bytes']),
+      fileName: serializer.fromJson<String>(json['fileName']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'documentId': serializer.toJson<int>(documentId),
+      'bytes': serializer.toJson<Uint8List>(bytes),
+      'fileName': serializer.toJson<String>(fileName),
+    };
+  }
+
+  DocumentVideoMediaData copyWith({
+    int? documentId,
+    Uint8List? bytes,
+    String? fileName,
+  }) => DocumentVideoMediaData(
+    documentId: documentId ?? this.documentId,
+    bytes: bytes ?? this.bytes,
+    fileName: fileName ?? this.fileName,
+  );
+  DocumentVideoMediaData copyWithCompanion(DocumentVideoMediaCompanion data) {
+    return DocumentVideoMediaData(
+      documentId: data.documentId.present
+          ? data.documentId.value
+          : this.documentId,
+      bytes: data.bytes.present ? data.bytes.value : this.bytes,
+      fileName: data.fileName.present ? data.fileName.value : this.fileName,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DocumentVideoMediaData(')
+          ..write('documentId: $documentId, ')
+          ..write('bytes: $bytes, ')
+          ..write('fileName: $fileName')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(documentId, $driftBlobEquality.hash(bytes), fileName);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is DocumentVideoMediaData &&
+          other.documentId == this.documentId &&
+          $driftBlobEquality.equals(other.bytes, this.bytes) &&
+          other.fileName == this.fileName);
+}
+
+class DocumentVideoMediaCompanion
+    extends UpdateCompanion<DocumentVideoMediaData> {
+  final Value<int> documentId;
+  final Value<Uint8List> bytes;
+  final Value<String> fileName;
+  const DocumentVideoMediaCompanion({
+    this.documentId = const Value.absent(),
+    this.bytes = const Value.absent(),
+    this.fileName = const Value.absent(),
+  });
+  DocumentVideoMediaCompanion.insert({
+    this.documentId = const Value.absent(),
+    required Uint8List bytes,
+    required String fileName,
+  }) : bytes = Value(bytes),
+       fileName = Value(fileName);
+  static Insertable<DocumentVideoMediaData> custom({
+    Expression<int>? documentId,
+    Expression<Uint8List>? bytes,
+    Expression<String>? fileName,
+  }) {
+    return RawValuesInsertable({
+      if (documentId != null) 'document_id': documentId,
+      if (bytes != null) 'bytes': bytes,
+      if (fileName != null) 'file_name': fileName,
+    });
+  }
+
+  DocumentVideoMediaCompanion copyWith({
+    Value<int>? documentId,
+    Value<Uint8List>? bytes,
+    Value<String>? fileName,
+  }) {
+    return DocumentVideoMediaCompanion(
+      documentId: documentId ?? this.documentId,
+      bytes: bytes ?? this.bytes,
+      fileName: fileName ?? this.fileName,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (documentId.present) {
+      map['document_id'] = Variable<int>(documentId.value);
+    }
+    if (bytes.present) {
+      map['bytes'] = Variable<Uint8List>(bytes.value);
+    }
+    if (fileName.present) {
+      map['file_name'] = Variable<String>(fileName.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DocumentVideoMediaCompanion(')
+          ..write('documentId: $documentId, ')
+          ..write('bytes: $bytes, ')
+          ..write('fileName: $fileName')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2014,6 +2275,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $DictionaryEntriesTable(this);
   late final $DocumentVideoFramesTable documentVideoFrames =
       $DocumentVideoFramesTable(this);
+  late final $DocumentVideoMediaTable documentVideoMedia =
+      $DocumentVideoMediaTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2023,6 +2286,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     documents,
     dictionaryEntries,
     documentVideoFrames,
+    documentVideoMedia,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -2032,6 +2296,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('document_video_frames', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'documents',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('document_video_media', kind: UpdateKind.delete)],
     ),
   ]);
 }
@@ -2522,6 +2793,30 @@ final class $$DocumentsTableReferences
       manager.$state.copyWith(prefetchedData: cache),
     );
   }
+
+  static MultiTypedResultKey<
+    $DocumentVideoMediaTable,
+    List<DocumentVideoMediaData>
+  >
+  _documentVideoMediaRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.documentVideoMedia,
+        aliasName: 'documents__id__document_video_media__document_id',
+      );
+
+  $$DocumentVideoMediaTableProcessedTableManager get documentVideoMediaRefs {
+    final manager = $$DocumentVideoMediaTableTableManager(
+      $_db,
+      $_db.documentVideoMedia,
+    ).filter((f) => f.documentId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _documentVideoMediaRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$DocumentsTableFilterComposer
@@ -2660,6 +2955,31 @@ class $$DocumentsTableFilterComposer
           }) => $$DocumentVideoFramesTableFilterComposer(
             $db: $db,
             $table: $db.documentVideoFrames,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> documentVideoMediaRefs(
+    Expression<bool> Function($$DocumentVideoMediaTableFilterComposer f) f,
+  ) {
+    final $$DocumentVideoMediaTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.documentVideoMedia,
+      getReferencedColumn: (t) => t.documentId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentVideoMediaTableFilterComposer(
+            $db: $db,
+            $table: $db.documentVideoMedia,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -2922,6 +3242,32 @@ class $$DocumentsTableAnnotationComposer
         );
     return f(composer);
   }
+
+  Expression<T> documentVideoMediaRefs<T extends Object>(
+    Expression<T> Function($$DocumentVideoMediaTableAnnotationComposer a) f,
+  ) {
+    final $$DocumentVideoMediaTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.documentVideoMedia,
+          getReferencedColumn: (t) => t.documentId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$DocumentVideoMediaTableAnnotationComposer(
+                $db: $db,
+                $table: $db.documentVideoMedia,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
 }
 
 class $$DocumentsTableTableManager
@@ -2941,6 +3287,7 @@ class $$DocumentsTableTableManager
             bool folderId,
             bool translationDocumentId,
             bool documentVideoFramesRefs,
+            bool documentVideoMediaRefs,
           })
         > {
   $$DocumentsTableTableManager(_$AppDatabase db, $DocumentsTable table)
@@ -3035,11 +3382,13 @@ class $$DocumentsTableTableManager
                 folderId = false,
                 translationDocumentId = false,
                 documentVideoFramesRefs = false,
+                documentVideoMediaRefs = false,
               }) {
                 return PrefetchHooks(
                   db: db,
                   explicitlyWatchedTables: [
                     if (documentVideoFramesRefs) db.documentVideoFrames,
+                    if (documentVideoMediaRefs) db.documentVideoMedia,
                   ],
                   addJoins:
                       <
@@ -3105,6 +3454,27 @@ class $$DocumentsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (documentVideoMediaRefs)
+                        await $_getPrefetchedData<
+                          Document,
+                          $DocumentsTable,
+                          DocumentVideoMediaData
+                        >(
+                          currentTable: table,
+                          referencedTable: $$DocumentsTableReferences
+                              ._documentVideoMediaRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$DocumentsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).documentVideoMediaRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.documentId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -3129,6 +3499,7 @@ typedef $$DocumentsTableProcessedTableManager =
         bool folderId,
         bool translationDocumentId,
         bool documentVideoFramesRefs,
+        bool documentVideoMediaRefs,
       })
     >;
 typedef $$DictionaryEntriesTableCreateCompanionBuilder =
@@ -3681,6 +4052,293 @@ typedef $$DocumentVideoFramesTableProcessedTableManager =
       DocumentVideoFrame,
       PrefetchHooks Function({bool documentId})
     >;
+typedef $$DocumentVideoMediaTableCreateCompanionBuilder =
+    DocumentVideoMediaCompanion Function({
+      Value<int> documentId,
+      required Uint8List bytes,
+      required String fileName,
+    });
+typedef $$DocumentVideoMediaTableUpdateCompanionBuilder =
+    DocumentVideoMediaCompanion Function({
+      Value<int> documentId,
+      Value<Uint8List> bytes,
+      Value<String> fileName,
+    });
+
+final class $$DocumentVideoMediaTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $DocumentVideoMediaTable,
+          DocumentVideoMediaData
+        > {
+  $$DocumentVideoMediaTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $DocumentsTable _documentIdTable(_$AppDatabase db) => db.documents
+      .createAlias('document_video_media__document_id__documents__id');
+
+  $$DocumentsTableProcessedTableManager get documentId {
+    final $_column = $_itemColumn<int>('document_id')!;
+
+    final manager = $$DocumentsTableTableManager(
+      $_db,
+      $_db.documents,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_documentIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$DocumentVideoMediaTableFilterComposer
+    extends Composer<_$AppDatabase, $DocumentVideoMediaTable> {
+  $$DocumentVideoMediaTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<Uint8List> get bytes => $composableBuilder(
+    column: $table.bytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$DocumentsTableFilterComposer get documentId {
+    final $$DocumentsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.documentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableFilterComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DocumentVideoMediaTableOrderingComposer
+    extends Composer<_$AppDatabase, $DocumentVideoMediaTable> {
+  $$DocumentVideoMediaTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<Uint8List> get bytes => $composableBuilder(
+    column: $table.bytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$DocumentsTableOrderingComposer get documentId {
+    final $$DocumentsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.documentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableOrderingComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DocumentVideoMediaTableAnnotationComposer
+    extends Composer<_$AppDatabase, $DocumentVideoMediaTable> {
+  $$DocumentVideoMediaTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<Uint8List> get bytes =>
+      $composableBuilder(column: $table.bytes, builder: (column) => column);
+
+  GeneratedColumn<String> get fileName =>
+      $composableBuilder(column: $table.fileName, builder: (column) => column);
+
+  $$DocumentsTableAnnotationComposer get documentId {
+    final $$DocumentsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.documentId,
+      referencedTable: $db.documents,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DocumentsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.documents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DocumentVideoMediaTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $DocumentVideoMediaTable,
+          DocumentVideoMediaData,
+          $$DocumentVideoMediaTableFilterComposer,
+          $$DocumentVideoMediaTableOrderingComposer,
+          $$DocumentVideoMediaTableAnnotationComposer,
+          $$DocumentVideoMediaTableCreateCompanionBuilder,
+          $$DocumentVideoMediaTableUpdateCompanionBuilder,
+          (DocumentVideoMediaData, $$DocumentVideoMediaTableReferences),
+          DocumentVideoMediaData,
+          PrefetchHooks Function({bool documentId})
+        > {
+  $$DocumentVideoMediaTableTableManager(
+    _$AppDatabase db,
+    $DocumentVideoMediaTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$DocumentVideoMediaTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$DocumentVideoMediaTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$DocumentVideoMediaTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> documentId = const Value.absent(),
+                Value<Uint8List> bytes = const Value.absent(),
+                Value<String> fileName = const Value.absent(),
+              }) => DocumentVideoMediaCompanion(
+                documentId: documentId,
+                bytes: bytes,
+                fileName: fileName,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> documentId = const Value.absent(),
+                required Uint8List bytes,
+                required String fileName,
+              }) => DocumentVideoMediaCompanion.insert(
+                documentId: documentId,
+                bytes: bytes,
+                fileName: fileName,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$DocumentVideoMediaTable, DocumentVideoMediaData>(
+                    table,
+                  ),
+                  $$DocumentVideoMediaTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({documentId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (documentId) {
+                      state = state.withJoin(
+                        currentTable: table,
+                        currentColumn: table.documentId,
+                        referencedTable: $$DocumentVideoMediaTableReferences
+                            ._documentIdTable(db),
+                        referencedColumn: $$DocumentVideoMediaTableReferences
+                            ._documentIdTable(db)
+                            .id,
+                      ) as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$DocumentVideoMediaTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $DocumentVideoMediaTable,
+      DocumentVideoMediaData,
+      $$DocumentVideoMediaTableFilterComposer,
+      $$DocumentVideoMediaTableOrderingComposer,
+      $$DocumentVideoMediaTableAnnotationComposer,
+      $$DocumentVideoMediaTableCreateCompanionBuilder,
+      $$DocumentVideoMediaTableUpdateCompanionBuilder,
+      (DocumentVideoMediaData, $$DocumentVideoMediaTableReferences),
+      DocumentVideoMediaData,
+      PrefetchHooks Function({bool documentId})
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3693,4 +4351,6 @@ class $AppDatabaseManager {
       $$DictionaryEntriesTableTableManager(_db, _db.dictionaryEntries);
   $$DocumentVideoFramesTableTableManager get documentVideoFrames =>
       $$DocumentVideoFramesTableTableManager(_db, _db.documentVideoFrames);
+  $$DocumentVideoMediaTableTableManager get documentVideoMedia =>
+      $$DocumentVideoMediaTableTableManager(_db, _db.documentVideoMedia);
 }

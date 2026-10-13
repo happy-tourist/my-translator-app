@@ -25,6 +25,8 @@ class VideoAttachment {
     this.sandboxPath,
     required this.durationSec,
     this.lastFramePage,
+    this.hasStoredMedia = false,
+    this.mediaFileName,
   });
 
   /// Durable platform ref / bookmark (may become a dead link — LD-22).
@@ -39,6 +41,20 @@ class VideoAttachment {
   /// Optional last viewed timeline second (0-based). Column historically named
   /// `last_frame_page`; reused as `last_second` (design D7).
   final int? lastFramePage;
+
+  /// True when full video bytes are stored in [DocumentVideoMedia] (Web reopen).
+  final bool hasStoredMedia;
+
+  /// Original file name for MIME / sandbox restore when [hasStoredMedia].
+  final String? mediaFileName;
+}
+
+/// Durable full-video payload in Drift (`DocumentVideoMedia`).
+class StoredVideoMedia {
+  const StoredVideoMedia({required this.bytes, required this.fileName});
+
+  final Uint8List bytes;
+  final String fileName;
 }
 
 /// Drift-backed library documents (`library/documents`).
@@ -268,6 +284,8 @@ class DocumentRepository {
     required int durationSec,
     int? lastFramePage,
     bool clearFrameCache = true,
+    Uint8List? mediaBytes,
+    String? mediaFileName,
   }) async {
     final original = await getById(documentId);
     if (original == null) {
@@ -278,6 +296,9 @@ class DocumentRepository {
     }
     if (lastFramePage != null && lastFramePage < 0) {
       throw LibraryValidationException('Last second must be ≥ 0');
+    }
+    if (mediaBytes != null && mediaBytes.isEmpty) {
+      throw LibraryValidationException('Video media bytes must not be empty');
     }
 
     await _db.transaction(() async {
@@ -294,6 +315,18 @@ class DocumentRepository {
               updatedAt: Value(DateTime.now()),
             ),
           );
+      if (mediaBytes != null) {
+        await _db.into(_db.documentVideoMedia).insertOnConflictUpdate(
+              DocumentVideoMediaCompanion.insert(
+                documentId: Value(documentId),
+                bytes: mediaBytes,
+                fileName: mediaFileName ?? 'video.mp4',
+              ),
+            );
+      } else if (clearFrameCache) {
+        // Replace without new bytes → drop stale media (LD-23-ish).
+        await _clearVideoMedia(documentId);
+      }
     });
   }
 
@@ -331,6 +364,7 @@ class DocumentRepository {
 
     await _db.transaction(() async {
       await _clearFrameCache(documentId);
+      await _clearVideoMedia(documentId);
       await (_db.update(_db.documents)..where((d) => d.id.equals(documentId)))
           .write(
             DocumentsCompanion(
@@ -347,18 +381,33 @@ class DocumentRepository {
   /// Returns saved video attachment meta, or null when none (LD-19 / LD-20).
   ///
   /// Does not validate that [VideoAttachment.videoUri] is still readable
-  /// (dead link keeps meta + cache — LD-22).
+  /// (dead link keeps meta + cache — LD-22). Prefer [getVideoMedia] +
+  /// [playbackRefFromMediaBytes] on Web after reload.
   Future<VideoAttachment?> getVideoAttachment(int documentId) async {
     final doc = await getById(documentId);
     if (doc == null) return null;
     final durationSec = doc.videoDurationSec;
     if (durationSec == null) return null;
+    final media = await (_db.select(_db.documentVideoMedia)
+          ..where((m) => m.documentId.equals(documentId)))
+        .getSingleOrNull();
     return VideoAttachment(
       videoUri: doc.videoUri,
       sandboxPath: doc.videoSandboxPath,
       durationSec: durationSec,
       lastFramePage: doc.videoLastFramePage,
+      hasStoredMedia: media != null,
+      mediaFileName: media?.fileName,
     );
+  }
+
+  /// Full video bytes when stored for durable reopen (schema 6).
+  Future<StoredVideoMedia?> getVideoMedia(int documentId) async {
+    final row = await (_db.select(_db.documentVideoMedia)
+          ..where((m) => m.documentId.equals(documentId)))
+        .getSingleOrNull();
+    if (row == null) return null;
+    return StoredVideoMedia(bytes: row.bytes, fileName: row.fileName);
   }
 
   /// Upserts a JPEG frame for [second] on [documentId] (LD-20).
@@ -413,8 +462,9 @@ class DocumentRepository {
     }
 
     await _db.transaction(() async {
-      // LD-18: clear JPEG frame cache before removing the original row.
+      // LD-18: clear JPEG frame cache + video media before removing the original.
       await _clearFrameCache(documentId);
+      await _clearVideoMedia(documentId);
       if (translationId != null) {
         await (_db.update(_db.documents)
               ..where((d) => d.id.equals(documentId)))
@@ -450,6 +500,12 @@ class DocumentRepository {
     await (_db.delete(
       _db.documentVideoFrames,
     )..where((f) => f.documentId.equals(documentId))).go();
+  }
+
+  Future<void> _clearVideoMedia(int documentId) async {
+    await (_db.delete(
+      _db.documentVideoMedia,
+    )..where((m) => m.documentId.equals(documentId))).go();
   }
 
   Future<List<int>> _hiddenTranslationIds() async {

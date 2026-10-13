@@ -522,4 +522,37 @@ void main() {
     final reloaded = await documents.getById(original.id);
     expect(reloaded!.translationDocumentId, translation.id);
   });
+
+  test('LD-20b: attachVideo stores durable media bytes for reopen', () async {
+    final folder = await folders.createFolder(name: 'Videos');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'ep.srt',
+      bytes: _srtBytes('hello'),
+    );
+    final media = Uint8List.fromList(List<int>.generate(64, (i) => i));
+
+    await documents.attachVideo(
+      documentId: original.id,
+      videoUri: 'blob:dead-after-reload',
+      sandboxPath: 'drift-media',
+      durationSec: 12,
+      mediaBytes: media,
+      mediaFileName: 'clip.mp4',
+    );
+
+    final attachment = await documents.getVideoAttachment(original.id);
+    expect(attachment!.hasStoredMedia, isTrue);
+    expect(attachment.mediaFileName, 'clip.mp4');
+    expect(attachment.sandboxPath, 'drift-media');
+
+    final stored = await documents.getVideoMedia(original.id);
+    expect(stored, isNotNull);
+    expect(stored!.fileName, 'clip.mp4');
+    expect(stored.bytes, media);
+
+    await documents.detachVideo(original.id);
+    expect(await documents.getVideoMedia(original.id), isNull);
+    expect(await documents.getVideoAttachment(original.id), isNull);
+  });
 }

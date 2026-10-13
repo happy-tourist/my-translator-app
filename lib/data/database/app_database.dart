@@ -6,7 +6,13 @@ import 'tables.dart';
 part 'app_database.g.dart';
 
 @DriftDatabase(
-  tables: [Folders, Documents, DictionaryEntries, DocumentVideoFrames],
+  tables: [
+    Folders,
+    Documents,
+    DictionaryEntries,
+    DocumentVideoFrames,
+    DocumentVideoMedia,
+  ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
@@ -15,7 +21,7 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.connect() => AppDatabase(_openConnection());
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -44,6 +50,10 @@ class AppDatabase extends _$AppDatabase {
         await migrator.addColumn(documents, documents.videoDurationSec);
         await migrator.addColumn(documents, documents.videoLastFramePage);
         await migrator.createTable(documentVideoFrames);
+      }
+      // Schema 6: durable full-video bytes (Web reopen after blob URL dies).
+      if (from < 6) {
+        await migrator.createTable(documentVideoMedia);
       }
     },
   );

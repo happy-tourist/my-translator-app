@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show AnyhowException, PanicException;
@@ -21,6 +22,7 @@ import 'package:my_translator_app/data/video/reader_video_picker.dart';
 import 'package:my_translator_app/data/video/video_frame_errors.dart';
 import 'package:my_translator_app/data/video/video_frame_extractor.dart';
 import 'package:my_translator_app/data/video/video_frame_extractor_platform.dart';
+import 'package:my_translator_app/data/video/video_playback_ref.dart';
 import 'package:my_translator_app/data/video/video_usable_path.dart';
 import 'package:my_translator_app/data/video/video_usable_path_platform.dart'
     as video_path;
@@ -204,7 +206,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         );
     final initialVideo = widget.initialVideoAttachment;
     if (initialVideo != null) {
-      _applyVideoAttachment(initialVideo);
+      unawaited(_hydrateVideoAttachment(initialVideo));
     } else {
       unawaited(_loadVideoAttachmentBestEffort());
     }
@@ -653,25 +655,48 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  /// Prefer sandbox/usable path; dead link still yields a ref so cache can show
-  /// (LD-22) while extract of missing seconds fails until re-pick.
-  String? _videoRefFromAttachment(VideoAttachment attachment) {
+  /// Prefer durable Drift media → session playback ref; else sandbox/path.
+  /// Dead link still yields a weak ref so JPEG cache can show (LD-22).
+  Future<String?> _resolveVideoRef(VideoAttachment attachment) async {
+    if (attachment.hasStoredMedia) {
+      final media = await widget.documentRepository
+          .getVideoMedia(widget.originalDocumentId);
+      if (media != null && media.bytes.isNotEmpty) {
+        return playbackRefFromMediaBytes(
+          bytes: media.bytes,
+          fileName: media.fileName,
+          documentId: '${widget.originalDocumentId}',
+        );
+      }
+    }
     final sandbox = attachment.sandboxPath;
+    if (sandbox == 'drift-media') {
+      return null;
+    }
     if (isUsableFilesystemPath(sandbox)) return sandbox;
     final uri = attachment.videoUri;
     if (isUsableFilesystemPath(uri)) return uri;
-    if (sandbox != null && sandbox.isNotEmpty) return sandbox;
-    if (uri != null && uri.isNotEmpty) return uri;
+    // Avoid restoring ephemeral blob: URLs (die after reload).
+    if (sandbox != null &&
+        sandbox.isNotEmpty &&
+        !sandbox.startsWith('blob:')) {
+      return sandbox;
+    }
+    if (uri != null && uri.isNotEmpty && !uri.startsWith('blob:')) {
+      return uri;
+    }
     return null;
   }
 
-  void _applyVideoAttachment(VideoAttachment attachment) {
+  Future<void> _hydrateVideoAttachment(VideoAttachment attachment) async {
     if (attachment.durationSec < 1) return;
-    final ref = _videoRefFromAttachment(attachment);
-    if (ref == null) return;
-    _videoRef = ref;
-    _videoTotalSeconds = attachment.durationSec;
-    // Prefer persisted last_second (lastFramePage column); else reading anchor.
+    final ref = await _resolveVideoRef(attachment);
+    if (!mounted) return;
+    if (ref == null) {
+      // Meta present but no playable ref — still expose duration for cache-only
+      // pages if we have a sentinel; without ref pages cannot extract.
+      return;
+    }
     final lastSecond = attachment.lastFramePage;
     final jumpSecond = lastSecond != null
         ? clampReadingTimeToSecond(lastSecond * 1000, attachment.durationSec)
@@ -679,8 +704,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
             widget.initialReadingAnchor?.startMs ?? 0,
             attachment.durationSec,
           );
-    _videoInitialSecond = jumpSecond < 0 ? 0 : jumpSecond;
-    _videoCurrentSecond = _videoInitialSecond;
+    final safeSecond = jumpSecond < 0 ? 0 : jumpSecond;
+    setState(() {
+      _videoRef = ref;
+      _videoTotalSeconds = attachment.durationSec;
+      _videoInitialSecond = safeSecond;
+      _videoCurrentSecond = safeSecond;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_hasVideo) return;
+      _videoPagesKey.currentState?.jumpToSecond(_videoInitialSecond);
+    });
   }
 
   Future<void> _loadVideoAttachmentBestEffort() async {
@@ -688,11 +722,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       final attachment = await widget.documentRepository
           .getVideoAttachment(widget.originalDocumentId);
       if (!mounted || attachment == null) return;
-      setState(() => _applyVideoAttachment(attachment));
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_hasVideo) return;
-        _videoPagesKey.currentState?.jumpToSecond(_videoInitialSecond);
-      });
+      await _hydrateVideoAttachment(attachment);
     } catch (e, st) {
       assert(() {
         debugPrint('getVideoAttachment failed (ignored): $e\n$st');
@@ -760,16 +790,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
           : clampReadingTimeToSecond(readingTimeMs, totalSeconds);
       final safeSecond = jumpSecond < 0 ? 0 : jumpSecond;
 
+      final mediaBytes = pick.bytes ?? await pick.readBytes?.call();
+      if (!mounted) return;
+      // Web: never persist ephemeral blob: URLs — store bytes + sentinel.
+      // Native: keep sandbox filesystem path for FFmpeg.
+      final persistSandbox =
+          kIsWeb ? 'drift-media' : usable.filesystemPath;
+
       await widget.documentRepository.attachVideo(
         documentId: widget.originalDocumentId,
         videoUri: usable.originalUri ?? pick.originalUri ?? usable.filesystemPath,
-        sandboxPath: usable.filesystemPath,
+        sandboxPath: persistSandbox,
         durationSec: totalSeconds,
         lastFramePage: safeSecond,
         clearFrameCache: clearFrameCache,
+        mediaBytes: mediaBytes,
+        mediaFileName: pick.fileName,
       );
       if (!mounted) return;
 
+      // Session ref: live usable path (blob or file) for this run.
       setState(() {
         _videoRef = usable.filesystemPath;
         _videoTotalSeconds = totalSeconds;

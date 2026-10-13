@@ -53,6 +53,20 @@ class DocumentVideoFrames extends Table {
   Set<Column> get primaryKey => {documentId, second};
 }
 
+/// Full video file bytes for durable reopen (esp. Web — blob URLs die on reload).
+///
+/// Native MAY also store a sandbox file path on [Documents.videoSandboxPath];
+/// Web restores a session object URL from these bytes.
+class DocumentVideoMedia extends Table {
+  IntColumn get documentId =>
+      integer().references(Documents, #id, onDelete: KeyAction.cascade)();
+  BlobColumn get bytes => blob()();
+  TextColumn get fileName => text()();
+
+  @override
+  Set<Column> get primaryKey => {documentId};
+}
+
 /// Personal vocabulary (`dictionary/entries`).
 /// [lemma] = morph identity (UNIQUE); [surfaceKey] = casefold surface / legacy stub.
 class DictionaryEntries extends Table {
