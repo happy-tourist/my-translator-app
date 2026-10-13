@@ -46,3 +46,6 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# OPUS-MT ONNX weights (local/HF download; exceed GitHub 100MB limit)
+assets/models/opus-mt-en-ru/onnx/

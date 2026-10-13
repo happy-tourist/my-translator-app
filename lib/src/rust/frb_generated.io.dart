@@ -6,6 +6,7 @@
 import 'api/parse.dart';
 import 'api/simple.dart';
 import 'api/tokenize.dart';
+import 'api/translate.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -48,6 +49,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<CueTokensDto> dco_decode_list_cue_tokens_dto(dynamic raw);
 
   @protected
+  List<OfflineModelAsset> dco_decode_list_offline_model_asset(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -55,6 +59,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<TokenDto> dco_decode_list_token_dto(dynamic raw);
+
+  @protected
+  OfflineModelAsset dco_decode_offline_model_asset(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -67,6 +74,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TokenDto dco_decode_token_dto(dynamic raw);
+
+  @protected
+  TranslateErrorKind dco_decode_translate_error_kind(dynamic raw);
+
+  @protected
+  TranslationResult dco_decode_translation_result(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -107,6 +120,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<OfflineModelAsset> sse_decode_list_offline_model_asset(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -114,6 +132,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<TokenDto> sse_decode_list_token_dto(SseDeserializer deserializer);
+
+  @protected
+  OfflineModelAsset sse_decode_offline_model_asset(
+    SseDeserializer deserializer,
+  );
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -126,6 +149,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TokenDto sse_decode_token_dto(SseDeserializer deserializer);
+
+  @protected
+  TranslateErrorKind sse_decode_translate_error_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  TranslationResult sse_decode_translation_result(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -167,6 +198,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_offline_model_asset(
+    List<OfflineModelAsset> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -177,6 +214,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_token_dto(List<TokenDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_offline_model_asset(
+    OfflineModelAsset self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
@@ -195,6 +238,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_token_dto(TokenDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_translate_error_kind(
+    TranslateErrorKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_translation_result(
+    TranslationResult self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

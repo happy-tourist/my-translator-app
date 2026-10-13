@@ -15,6 +15,8 @@ import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
+import 'package:my_translator_app/data/translate/offline_translate.dart';
+import 'package:my_translator_app/data/translate/offline_translate_platform.dart';
 import 'package:my_translator_app/features/reader/cue_row.dart';
 import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
@@ -47,6 +49,7 @@ class ReaderScreen extends StatefulWidget {
     this.tokenizeCues,
     this.markVocabTokens,
     this.filePicker,
+    this.offlineTranslate,
   });
 
   final String title;
@@ -71,6 +74,9 @@ class ReaderScreen extends StatefulWidget {
 
   /// Defaults to [FilePicker.pickFiles].
   final ReaderTranslationPicker? filePicker;
+
+  /// Offline EN→RU gloss for Add/Edit sheets. Defaults to platform facade.
+  final OfflineTranslateFn? offlineTranslate;
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
@@ -124,6 +130,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       widget.markVocabTokens ??
       (({required cues, required vocabLemmas}) =>
           rust_tokenize.markVocabTokens(cues: cues, vocabLemmas: vocabLemmas));
+
+  late final OfflineTranslateFn _offlineTranslate =
+      widget.offlineTranslate ?? createPlatformOfflineTranslate();
 
   bool get _hasTranslationCues =>
       _translationCues != null && _translationCues!.isNotEmpty;
@@ -497,6 +506,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           surfaceKey: keys.surfaceKey,
           initialContext: cueText,
           dictionaryRepository: widget.dictionaryRepository,
+          offlineTranslate: _offlineTranslate,
         );
       },
     );
@@ -553,6 +563,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           entry: entry,
           surface: displaySurface,
           dictionaryRepository: widget.dictionaryRepository,
+          offlineTranslate: _offlineTranslate,
         );
       },
     );
@@ -1211,6 +1222,7 @@ class _AddVocabSheet extends StatefulWidget {
     required this.surfaceKey,
     required this.initialContext,
     required this.dictionaryRepository,
+    required this.offlineTranslate,
   });
 
   final String surface;
@@ -1218,6 +1230,7 @@ class _AddVocabSheet extends StatefulWidget {
   final String surfaceKey;
   final String initialContext;
   final DictionaryRepository dictionaryRepository;
+  final OfflineTranslateFn offlineTranslate;
 
   @override
   State<_AddVocabSheet> createState() => _AddVocabSheetState();
@@ -1228,6 +1241,9 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
   late final TextEditingController _contextController;
   String? _validationError;
   var _saving = false;
+  var _translating = false;
+  /// After Translate starts once, stays disabled until sheet closes (RT-19).
+  var _translateStarted = false;
 
   @override
   void initState() {
@@ -1241,6 +1257,47 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
     _translationController.dispose();
     _contextController.dispose();
     super.dispose();
+  }
+
+  bool get _canTranslate => !_translating && !_translateStarted;
+
+  Future<void> _onTranslate() async {
+    if (!_canTranslate) return;
+    setState(() {
+      _translating = true;
+      _translateStarted = true;
+    });
+    try {
+      final outcome = await widget.offlineTranslate(text: widget.surface);
+      if (!mounted) return;
+      switch (outcome) {
+        case OfflineTranslateOk(:final primaryGloss):
+          _translationController.text = primaryGloss;
+        case OfflineTranslateErr(:final kind):
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              key: const Key('readerAddVocabTranslateErrorSnack'),
+              content: Text(offlineTranslateUserMessage(kind)),
+            ),
+          );
+      }
+    } catch (e, st) {
+      assert(() {
+        debugPrint('reader add translate unexpected: $e\n$st');
+        return true;
+      }());
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          key: const Key('readerAddVocabTranslateErrorSnack'),
+          content: Text(
+            offlineTranslateUserMessage(OfflineTranslateErrorKind.internal),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _translating = false);
+    }
   }
 
   Future<void> _onSave() async {
@@ -1305,13 +1362,44 @@ class _AddVocabSheetState extends State<_AddVocabSheet> {
               style: theme.textTheme.titleMedium,
             ),
             const SizedBox(height: 16),
-            InputDecorator(
-              key: const Key('readerAddVocabSurface'),
-              decoration: const InputDecoration(
-                labelText: 'Word',
-                border: OutlineInputBorder(),
-              ),
-              child: Text(widget.surface),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: InputDecorator(
+                    key: const Key('readerAddVocabSurface'),
+                    decoration: const InputDecoration(
+                      labelText: 'Word',
+                      border: OutlineInputBorder(),
+                    ),
+                    child: Text(widget.surface),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: OutlinedButton(
+                    key: const Key('readerAddVocabTranslate'),
+                    onPressed: _canTranslate ? _onTranslate : null,
+                    child: _translating
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Translate'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Column(
+              key: Key('readerAddVocabTranslateAttribution'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(kOfflineTranslateAttribution),
+                Text(kOfflineTranslateDisclaimer),
+              ],
             ),
             const SizedBox(height: 12),
             TextField(
@@ -1370,11 +1458,13 @@ class _EditVocabSheet extends StatefulWidget {
     required this.entry,
     required this.surface,
     required this.dictionaryRepository,
+    required this.offlineTranslate,
   });
 
   final DictionaryEntry entry;
   final String surface;
   final DictionaryRepository dictionaryRepository;
+  final OfflineTranslateFn offlineTranslate;
 
   @override
   State<_EditVocabSheet> createState() => _EditVocabSheetState();
@@ -1385,6 +1475,9 @@ class _EditVocabSheetState extends State<_EditVocabSheet> {
   late final TextEditingController _contextController;
   String? _validationError;
   var _busy = false;
+  var _translating = false;
+  /// After Translate starts once, stays disabled until sheet closes (RT-24).
+  var _translateStarted = false;
 
   @override
   void initState() {
@@ -1400,6 +1493,47 @@ class _EditVocabSheetState extends State<_EditVocabSheet> {
     _translationController.dispose();
     _contextController.dispose();
     super.dispose();
+  }
+
+  bool get _canTranslate => !_translating && !_translateStarted;
+
+  Future<void> _onTranslate() async {
+    if (!_canTranslate) return;
+    setState(() {
+      _translating = true;
+      _translateStarted = true;
+    });
+    try {
+      final outcome = await widget.offlineTranslate(text: widget.surface);
+      if (!mounted) return;
+      switch (outcome) {
+        case OfflineTranslateOk(:final primaryGloss):
+          _translationController.text = primaryGloss;
+        case OfflineTranslateErr(:final kind):
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              key: const Key('readerEditVocabTranslateErrorSnack'),
+              content: Text(offlineTranslateUserMessage(kind)),
+            ),
+          );
+      }
+    } catch (e, st) {
+      assert(() {
+        debugPrint('reader edit translate unexpected: $e\n$st');
+        return true;
+      }());
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          key: const Key('readerEditVocabTranslateErrorSnack'),
+          content: Text(
+            offlineTranslateUserMessage(OfflineTranslateErrorKind.internal),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _translating = false);
+    }
   }
 
   Future<void> _onSave() async {
@@ -1501,13 +1635,44 @@ class _EditVocabSheetState extends State<_EditVocabSheet> {
               child: Text(widget.entry.lemma),
             ),
             const SizedBox(height: 12),
-            InputDecorator(
-              key: const Key('readerEditVocabSurface'),
-              decoration: const InputDecoration(
-                labelText: 'Surface',
-                border: OutlineInputBorder(),
-              ),
-              child: Text(widget.surface),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: InputDecorator(
+                    key: const Key('readerEditVocabSurface'),
+                    decoration: const InputDecoration(
+                      labelText: 'Surface',
+                      border: OutlineInputBorder(),
+                    ),
+                    child: Text(widget.surface),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: OutlinedButton(
+                    key: const Key('readerEditVocabTranslate'),
+                    onPressed: _canTranslate ? _onTranslate : null,
+                    child: _translating
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Translate'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Column(
+              key: Key('readerEditVocabTranslateAttribution'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(kOfflineTranslateAttribution),
+                Text(kOfflineTranslateDisclaimer),
+              ],
             ),
             const SizedBox(height: 12),
             TextField(

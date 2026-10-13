@@ -12,5 +12,12 @@ fasrt = "=0.5.0"
 panko = "0.2.0"
 wordnet-lemmatizer = { version = "0.1", default-features = false }
 
+# Offline OPUS-MT EN→RU (native only). Spike 2.0 / translate module — do not link into wasm32.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = "2.0.0-rc.14"
+# default features pull onig/esaxx C++ with /MT — conflicts with ort (MD) on Windows MSVC
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+ndarray = "0.17"
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

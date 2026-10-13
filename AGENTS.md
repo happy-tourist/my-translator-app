@@ -10,11 +10,13 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 | Слой | Роль | Каталог |
 |------|------|---------|
-| Flutter UI | экраны, жесты, отображение, **user persistence (Drift)** | `lib/` |
-| Rust crate | compute: парсинг, NLP, офлайн-перевод (без user SQLite) | `rust/` |
+| Flutter UI | экраны, жесты, отображение, **user persistence (Drift)**, Dart facade офлайн-перевода | `lib/` |
+| Rust crate | compute: парсинг, NLP, **native** офлайн-перевод ORT (без user SQLite) | `rust/` |
 | FRB glue | FFI/WASM-сборка (не бизнес-логика) | `rust_builder/` |
 
 Связка — **flutter_rust_bridge** (FRB) 2.13.0: API в Rust (`rust/src/api/`) → generated Dart (`lib/src/rust/`). На native — FFI, на Web — WASM (in-process). На текущем этапе внешние API-ключи не используются.
+
+**Offline translate (OPUS-MT EN→RU):** dual runtime — **native** = Rust `ort` + thin FRB (`init_offline_translate` / `translate_text`); **Web** = Transformers.js behind the same Dart facade `lib/data/translate/` (**не** через Rust WASM). UI всегда через facade (Keys / SnackBar — OpenSpec design D4); см. meta skill `work-with-translate`.
 
 ---
 
@@ -26,9 +28,9 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Current vs target
 
-**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **4**). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`). Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). Rust: `parse/` + `tokenize/` + `lemmatize/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI).
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **4**). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`). Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). **Offline Translate** (OPUS-MT EN→RU) on Vocab + Reader sheets via `lib/data/translate/` (native Rust ORT / Web Transformers.js). Rust: `parse/` + `tokenize/` + `lemmatize/` + `translate/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI).
 
-**Ещё target:** phrase-span highlight / phrase Add; offline translate; Rust cue pairing for index-aligned split — следующие changes.
+**Ещё target:** phrase-span highlight / phrase Add; Rust cue pairing for index-aligned split — следующие changes.
 
 ---
 
@@ -41,7 +43,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 3. **Подсветка знакомых слов** (сейчас) — записи словаря подсвечиваются в оригинале; матч по morph lemma (`run` / `running` / `ran` = одно слово).
 4. **Разделённый экран** (сейчас MVP) — сверху оригинал, снизу файл перевода; sync по ближайшему `startMs`, позже — по индексу при pairing.
 5. **Работа с ИИ** (опционально, позже) — перевод фраз, фразовые глаголы, контекст; разные провайдеры через API.
-6. **Офлайн-перевод** (target) — базовый перевод слов/фраз без интернета.
+6. **Офлайн-перевод** (сейчас) — OPUS-MT EN→RU: кнопка Translate в Vocab / Reader sheets; native Rust ORT, Web Transformers.js, один Dart facade.
 
 ### Ключевые функции
 
@@ -49,7 +51,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 - Токенизация + EN WordNet лемматизация + mark (сейчас); RU morph — later
 - Личный словарь: переводы + контекст + `surface_key` (сейчас, Drift schema 4)
 - Подсветка сохранённых слов с учётом морфологии (сейчас, original pane)
-- Тап → bottom CTA + add/edit vocab sheet (сейчас); офлайн-карточка перевода — later
+- Тап → bottom CTA + add/edit vocab sheet (сейчас); Translate на sheet заполняет Translation (сейчас); мгновенная word-card chrome — later
 - Выделение фразы → перевод фразы целиком (target)
 - Split view: оригинал + файл перевода, sync scroll (MVP: nearest `startMs`)
 - Опциональный ИИ для перевода/объяснений (later)
@@ -58,9 +60,9 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD); cues-first Reader with single-token tap→sheet, morph lemma highlight, split toggle / load-delete translation / time sync + reading-anchor resume; Drift schema v4 (`surface_key` on dictionary entries, stub→morph migration via `lemmaKeysForSurfaces`) + repositories (`attachTranslation` / `saveReadingAnchor` / `loadBytes` / content store)
-- Rust: `parse/` + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + FRB `parse_subtitles` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
-- Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold)
+- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation) + **Vocab** (CRUD + Translate); cues-first Reader with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time sync + reading-anchor resume; Drift schema v4 (`surface_key` on dictionary entries, stub→morph migration via `lemmaKeysForSurfaces`) + repositories; offline translate facade `lib/data/translate/`
+- Rust: `parse/` + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + `translate/` (native ORT) + FRB `parse_subtitles` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` / `init_offline_translate` / `translate_text` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
+- Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold); Web MT — Transformers.js worker + `web/translate_bridge.js`
 
 ---
 
@@ -76,7 +78,8 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Продуктовые принципы
 
-- Тяжёлый **compute** (parse / tokenize / lemmatize / offline translate) — в **Rust**; Flutter — UI, оркестрация FRB и **user persistence через Drift**
+- Тяжёлый **compute** (parse / tokenize / lemmatize; offline translate **на native**) — в **Rust**; Flutter — UI, оркестрация FRB/facade и **user persistence через Drift**
+- **Web offline translate exception:** Transformers.js за `lib/data/translate/` (тот же UX-контракт; не «весь translate только в Rust»)
 - Офлайн по умолчанию; без обязательных внешних ключей на старте
 - Быстрая итерация UI через Flutter Hot Reload; ядро — нативная производительность Rust
 - Единая кодовая база для целевых платформ: **Android, iOS, Web (WASM)**
@@ -122,9 +125,9 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 
 ### UX areas
 
-**Сейчас:** Library (папки / import / open + linked translation restore), cues-first Reader (таймкоды + текст, single-token tap→vocab sheet, morph lemma highlight on original pane, optional horizontal split + sync), Vocab CRUD.
+**Сейчас:** Library (папки / import / open + linked translation restore), cues-first Reader (таймкоды + текст, single-token tap→vocab sheet + Translate, morph lemma highlight on original pane, optional horizontal split + sync), Vocab CRUD + Translate (OPUS-MT EN→RU via `lib/data/translate/` — not instant word card).
 
-**Target (later):** phrase multi-token highlight/Add, offline word card gloss, index-aligned paired split, настройки (языки, опциональный ИИ).
+**Target (later):** phrase multi-token highlight/Add; index-aligned paired split; настройки (языки, опциональный ИИ).
 
 Роутера и state-management пакетов (Provider/Riverpod/Bloc) пока нет — `Navigator` + screen state.
 
@@ -154,12 +157,12 @@ Path-зависимость: `pubspec.yaml` → `rust_lib_my_translator_app` (`r
 | Токенизация / лемматизация / матч словоформ | Rust |
 | Библиотека папок / документов (`library/folders`, `library/documents`) | Drift в `lib/` |
 | Словарь CRUD + контекст (`dictionary/entries`) | Drift в `lib/` (persist); morph lemma keys — Rust FRB (`lemma_keys_for_surfaces` / `TokenDto.lemma_key`) |
-| Офлайн-перевод слов/фраз | Rust |
+| Офлайн-перевод слов/фраз (OPUS-MT EN→RU) | Native: Rust `translate/` + FRB; Web: Transformers.js; UI facade `lib/data/translate/` |
 | Подсветка / разметка токенов для UI | Rust готовит данные; Flutter рисует |
 | Экраны library / vocab / reader / split | `lib/` |
 | Смена FFI-контракта (compute) | `rust/src/api/` → codegen → Dart-вызовы |
 
-Не дублировать парсинг/лемматизацию/offline translate на Dart. User persist — Drift, не FRB storage API.
+Не дублировать парсинг/лемматизацию на Dart; offline translate на **native** — только через FRB, на **Web** — только через facade→JS (не изобретать gloss в виджетах). User persist — Drift, не FRB storage API.
 
 ---
 
@@ -191,13 +194,14 @@ Package managers: pub (Dart), Cargo (`rust/`).
 
 Rust:
 
-1. `rust/src/lib.rs` — `mod parse` + `tokenize` + `lemmatize` + `api` + `frb_generated`
-2. `rust/src/api/mod.rs` — `simple`, `parse`, `tokenize`, …
+1. `rust/src/lib.rs` — `mod parse` + `tokenize` + `lemmatize` + `translate` + `api` + `frb_generated`
+2. `rust/src/api/mod.rs` — `simple`, `parse`, `tokenize`, `translate`
 3. `rust/src/parse/` — subtitle parse core; `api/parse.rs` — тонкий FRB
 4. `rust/src/tokenize/` + `lemmatize/` — panko spans + EN WordNet morph keys; thin exports on `api/tokenize.rs`
-5. `rust/src/api/simple.rs` — scaffold demo (не product home)
+5. `rust/src/translate/` + `api/translate.rs` — native ORT (`init_offline_translate` / `translate_text` / `is_offline_translate_ready`); Web — JS за facade, без FRB translate
+6. `rust/src/api/simple.rs` — scaffold demo (не product home)
 
-Дальше: offline translate вне `api/` + тонкий экспорт. User DB — не в Rust.
+User DB — не в Rust.
 
 ---
 
@@ -220,9 +224,10 @@ my_translator_app/
 ├── lib/
 │   ├── main.dart             ← RustLib.init + runApp
 │   ├── app/                  ← MaterialApp, Library|Vocab shell
-│   ├── data/                 ← Drift DB, repositories (folders/docs/dict)
+│   ├── data/                 ← Drift DB, repositories; translate facade (`data/translate/`)
 │   ├── features/             ← upload (library), reader, vocab, …
 │   └── src/rust/             ← GENERATED (не править)
+├── assets/models/            ← OPUS-MT ONNX + tokenizer (basenames after spike)
 ├── rust/
 │   ├── Cargo.toml
 │   └── src/
@@ -230,12 +235,13 @@ my_translator_app/
 │       ├── parse/            ← subtitle parse core
 │       ├── tokenize/         ← panko word spans
 │       ├── lemmatize/        ← EN WordNet morph keys + mark helpers
+│       ├── translate/        ← native ORT offline MT (OPUS-MT EN→RU)
 │       ├── api/              ← публичный FFI API (compute)
 │       └── frb_generated.rs  ← GENERATED
 ├── rust_builder/             ← glue / cargokit
 ├── integration_test/
 ├── test/
-└── android|ios|linux|macos|windows|web/
+└── android|ios|linux|macos|windows|web/  ← web: Transformers.js worker for offline MT
 ```
 
 Целевые платформы продукта: **Android, iOS, Web**. Остальные runner-каталоги — стандартный Flutter scaffold; не развивать как продукт без явной задачи.
@@ -245,15 +251,16 @@ my_translator_app/
 ## Layering / Dependency Direction
 
 ```
-lib/**  (Flutter UI + Drift data layer)
+lib/**  (Flutter UI + Drift data layer + translate facade)
   → Drift DAOs / repositories   (folders, documents, dictionary_entries)
-  → lib/src/rust/api/*  (generated)   # compute only when needed
+  → lib/data/translate/         # offline MT facade (native FRB | web JS)
+  → lib/src/rust/api/*  (generated)   # compute only when needed (not web MT)
       → rust/src/api/*  (FFI surface)
           → rust modules: parse / tokenize / lemmatize / translate
 ```
 
 - User data (library folders/documents, dictionary) — **Drift** source of truth в Flutter.
-- Parse / NLP / offline translate — Rust; не дублировать на Dart.
+- Parse / NLP — Rust; offline translate **native** — Rust ORT + FRB; **Web** — Transformers.js behind facade (documented exception).
 - Не вводить `rusqlite` / `rust/src/db` для пользовательских данных.
 - `rust_builder/` не трогать без нужды сборки.
 
@@ -271,9 +278,13 @@ lib/**  (Flutter UI + Drift data layer)
 | `addNumbers(a:, b:)` | `add_numbers` | scaffold demo `a + b` |
 | `RustLib.init()` | `init_app` | `setup_default_user_utils()` |
 
-### Ожидаемые области API (target, ещё нет)
+### Offline translate API (shipped native; Web via facade)
 
-- translate word/phrase (offline)
+| Dart (generated / facade) | Rust | Notes |
+|---------------------------|------|--------|
+| via `lib/data/translate/` → `initOfflineTranslate` / `translateText` / `isOfflineTranslateReady` | `api::translate::*` | Native only; wasm stubs → `EngineUnavailable` |
+| Web path | — | Transformers.js worker; **not** these FRB exports |
+
 - (позже) optional AI explain/translate
 
 Dictionary / library CRUD — **не** FRB storage API: persist через Drift в `lib/`. Highlight membership: Flutter loads morph lemmas from Drift and passes them to `markVocabTokens`.
@@ -292,7 +303,7 @@ Dictionary / library CRUD — **не** FRB storage API: persist через Drift
 - **Reader session** — открытый документ, позиция скролла, режим split
 - **Settings** — языки, (позже) ИИ-провайдер (Drift later)
 
-Размещение: user persist — Drift / Flutter; compute (parse/NLP/translate) — Rust; виджеты и жесты — Flutter.
+Размещение: user persist — Drift / Flutter; compute (parse/NLP; native offline translate) — Rust; Web offline translate — JS + facade; виджеты и жесты — Flutter.
 
 ---
 
@@ -328,5 +339,6 @@ Dictionary / library CRUD — **не** FRB storage API: persist через Drift
 ## Related Layers (in-repo)
 
 - **Flutter** (`lib/`) — UI Translation Reader + Drift user persistence
-- **Rust** (`rust/`) — compute-ядро (parse / NLP / offline translate); без user SQLite
+- **Rust** (`rust/`) — compute-ядро (parse / NLP / native offline translate ORT); без user SQLite
+- **Web offline MT** — Transformers.js + `lib/data/translate/` (исключение из «весь translate в Rust»)
 - Согласование compute-контракта — только через FRB codegen, не ручным edit generated-файлов

@@ -7,6 +7,8 @@ import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_content_store_platform.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
+import 'package:my_translator_app/data/translate/offline_translate.dart';
+import 'package:my_translator_app/data/translate/offline_translate_platform.dart';
 import 'package:my_translator_app/features/upload/library_screen.dart';
 import 'package:my_translator_app/features/vocab/vocabulary_screen.dart';
 import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
@@ -21,6 +23,7 @@ class AppShell extends StatefulWidget {
     this.documentRepository,
     this.dictionaryRepository,
     this.lemmaKeysForSurfaces,
+    this.offlineTranslate,
   });
 
   final AppDatabase database;
@@ -29,6 +32,7 @@ class AppShell extends StatefulWidget {
   final DocumentRepository? documentRepository;
   final DictionaryRepository? dictionaryRepository;
   final LemmaKeysForSurfacesFn? lemmaKeysForSurfaces;
+  final OfflineTranslateFn? offlineTranslate;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -41,6 +45,8 @@ class _AppShellState extends State<AppShell> {
   late final DocumentRepository _documents;
   late final DictionaryRepository _dictionary;
   late final LemmaKeysForSurfacesFn _lemmaKeysForSurfaces;
+  /// One facade for Vocab + Reader (design D4.1).
+  late final OfflineTranslateFn _offlineTranslate;
 
   @override
   void initState() {
@@ -57,6 +63,8 @@ class _AppShellState extends State<AppShell> {
     _lemmaKeysForSurfaces =
         widget.lemmaKeysForSurfaces ??
         ((surfaces) => rust_tokenize.lemmaKeysForSurfaces(surfaces: surfaces));
+    _offlineTranslate =
+        widget.offlineTranslate ?? createPlatformOfflineTranslate();
   }
 
   @override
@@ -66,10 +74,12 @@ class _AppShellState extends State<AppShell> {
         folderRepository: _folders,
         documentRepository: _documents,
         dictionaryRepository: _dictionary,
+        offlineTranslate: _offlineTranslate,
       ),
       VocabularyScreen(
         dictionaryRepository: _dictionary,
         lemmaKeysForSurfaces: _lemmaKeysForSurfaces,
+        offlineTranslate: _offlineTranslate,
       ),
     ];
 

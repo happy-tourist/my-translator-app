@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
+import 'package:my_translator_app/data/translate/offline_translate.dart';
 import 'package:my_translator_app/features/vocab/vocabulary_screen.dart';
 
 import '../support/test_database.dart';
@@ -37,12 +40,14 @@ void main() {
   Future<void> pumpVocab(
     WidgetTester tester, {
     Future<List<String>> Function(List<String>)? lemmaKeys,
+    OfflineTranslateFn? offlineTranslate,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: VocabularyScreen(
           dictionaryRepository: dictionary,
           lemmaKeysForSurfaces: lemmaKeys ?? _identityLemmaKeys,
+          offlineTranslate: offlineTranslate,
         ),
       ),
     );
@@ -164,5 +169,178 @@ void main() {
     expect(list.single.lemma, 'look up');
     expect(list.single.surfaceKey, 'look up');
     expect(list.single.translation, 'искать');
+  });
+
+  testWidgets('DE-19: Translate fills translation on Vocab form', (tester) async {
+    var translateCalls = 0;
+    String? lastQuery;
+    await pumpVocab(
+      tester,
+      offlineTranslate: ({
+        required String text,
+        String sourceLang = 'en',
+        String targetLang = 'ru',
+      }) async {
+        translateCalls++;
+        lastQuery = text;
+        return const OfflineTranslateOk(primaryGloss: 'привет');
+      },
+    );
+
+    await tester.enterText(find.byKey(const Key('vocabLemmaField')), 'hello');
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('vocabTranslationField')),
+      'old',
+    );
+    await tester.tap(find.byKey(const Key('vocabTranslateButton')));
+    await tester.pumpAndSettle();
+
+    expect(translateCalls, 1);
+    expect(lastQuery, 'hello');
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('vocabTranslationField')),
+    );
+    expect(translation.controller!.text, 'привет');
+    expect(await dictionary.list(), isEmpty);
+
+    // Add stays enabled during/after Translate (not blocked by Translate).
+    final add = tester.widget<ElevatedButton>(
+      find.byKey(const Key('vocabAddButton')),
+    );
+    expect(add.onPressed, isNotNull);
+
+    // Re-enabled after success.
+    final translateBtn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('vocabTranslateButton')),
+    );
+    expect(translateBtn.onPressed, isNotNull);
+  });
+
+  testWidgets('DE-20: Translate disabled when lemma empty', (tester) async {
+    await pumpVocab(
+      tester,
+      offlineTranslate: ({
+        required String text,
+        String sourceLang = 'en',
+        String targetLang = 'ru',
+      }) async =>
+          const OfflineTranslateOk(primaryGloss: 'x'),
+    );
+
+    var btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('vocabTranslateButton')),
+    );
+    expect(btn.onPressed, isNull);
+
+    await tester.enterText(find.byKey(const Key('vocabLemmaField')), '   ');
+    await tester.pump();
+    btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('vocabTranslateButton')),
+    );
+    expect(btn.onPressed, isNull);
+
+    await tester.enterText(find.byKey(const Key('vocabLemmaField')), 'hi');
+    await tester.pump();
+    btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('vocabTranslateButton')),
+    );
+    expect(btn.onPressed, isNotNull);
+  });
+
+  testWidgets('DE-21: Translate error on Vocab does not fake gloss', (
+    tester,
+  ) async {
+    await pumpVocab(
+      tester,
+      offlineTranslate: ({
+        required String text,
+        String sourceLang = 'en',
+        String targetLang = 'ru',
+      }) async =>
+          const OfflineTranslateErr(
+            kind: OfflineTranslateErrorKind.engineUnavailable,
+          ),
+    );
+
+    await tester.enterText(find.byKey(const Key('vocabLemmaField')), 'hello');
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('vocabTranslationField')),
+      'keep-me',
+    );
+    await tester.tap(find.byKey(const Key('vocabTranslateButton')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('vocabTranslateErrorSnack')), findsOneWidget);
+    expect(
+      find.text('Translation unavailable. Try again later'),
+      findsOneWidget,
+    );
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('vocabTranslationField')),
+    );
+    expect(translation.controller!.text, 'keep-me');
+
+    final translateBtn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('vocabTranslateButton')),
+    );
+    expect(translateBtn.onPressed, isNotNull);
+  });
+
+  testWidgets('DE-22: Attribution and disclaimer visible on Vocab', (
+    tester,
+  ) async {
+    await pumpVocab(
+      tester,
+      offlineTranslate: ({
+        required String text,
+        String sourceLang = 'en',
+        String targetLang = 'ru',
+      }) async =>
+          const OfflineTranslateOk(primaryGloss: 'x'),
+    );
+
+    expect(find.byKey(const Key('vocabTranslateAttribution')), findsOneWidget);
+    expect(find.text(kOfflineTranslateAttribution), findsOneWidget);
+    expect(find.text(kOfflineTranslateDisclaimer), findsOneWidget);
+  });
+
+  testWidgets('Vocab Translate shows loading then re-enables', (tester) async {
+    final completer = Completer<OfflineTranslateOutcome>();
+    await pumpVocab(
+      tester,
+      offlineTranslate: ({
+        required String text,
+        String sourceLang = 'en',
+        String targetLang = 'ru',
+      }) =>
+          completer.future,
+    );
+
+    await tester.enterText(find.byKey(const Key('vocabLemmaField')), 'hello');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('vocabTranslateButton')));
+    await tester.pump();
+
+    var btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('vocabTranslateButton')),
+    );
+    expect(btn.onPressed, isNull);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+
+    // Add must not be blocked by Translate loading.
+    final add = tester.widget<ElevatedButton>(
+      find.byKey(const Key('vocabAddButton')),
+    );
+    expect(add.onPressed, isNotNull);
+
+    completer.complete(const OfflineTranslateOk(primaryGloss: 'привет'));
+    await tester.pumpAndSettle();
+
+    btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('vocabTranslateButton')),
+    );
+    expect(btn.onPressed, isNotNull);
   });
 }

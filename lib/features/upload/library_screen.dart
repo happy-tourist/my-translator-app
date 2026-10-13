@@ -12,6 +12,7 @@ import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
+import 'package:my_translator_app/data/translate/offline_translate.dart';
 import 'package:my_translator_app/features/reader/reader_screen.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
@@ -40,6 +41,7 @@ class LibraryScreen extends StatefulWidget {
     this.parseSubtitles,
     this.tokenizeCues,
     this.markVocabTokens,
+    this.offlineTranslate,
   });
 
   final FolderRepository folderRepository;
@@ -55,6 +57,9 @@ class LibraryScreen extends StatefulWidget {
 
   /// Passed through to [ReaderScreen] (test seam; defaults to FRB there).
   final MarkVocabTokensFn? markVocabTokens;
+
+  /// Passed through to [ReaderScreen] (shared shell facade; defaults there).
+  final OfflineTranslateFn? offlineTranslate;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -312,6 +317,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             parseSubtitles: widget.parseSubtitles,
             tokenizeCues: widget.tokenizeCues,
             markVocabTokens: widget.markVocabTokens,
+            offlineTranslate: widget.offlineTranslate,
           ),
         ),
       );

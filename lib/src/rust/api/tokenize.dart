@@ -16,7 +16,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<List<CueTokensDto>> tokenizeCues({required List<String> texts}) =>
     RustLib.instance.api.crateApiTokenizeTokenizeCues(texts: texts);
 
-/// Set `is_in_vocab` from morph lemma set (casefold both sides before equality).
+/// Set `is_in_vocab` from morph singles **and** phrase windows (design D2).
+///
+/// Thin FRB wrapper over [`lemmatize::mark_vocab_flags`].
 Future<List<CueTokensDto>> markVocabTokens({
   required List<CueTokensDto> cues,
   required List<String> vocabLemmas,

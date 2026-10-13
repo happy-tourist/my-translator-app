@@ -6,6 +6,7 @@
 import 'api/parse.dart';
 import 'api/simple.dart';
 import 'api/tokenize.dart';
+import 'api/translate.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -71,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1131912890;
+  int get rustContentHash => -1060900801;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -86,6 +87,12 @@ abstract class RustLibApi extends BaseApi {
   Future<int> crateApiSimpleAddNumbers({required int a, required int b});
 
   Future<void> crateApiSimpleInitApp();
+
+  Future<void> crateApiTranslateInitOfflineTranslate({
+    required List<OfflineModelAsset> assets,
+  });
+
+  Future<bool> crateApiTranslateIsOfflineTranslateReady();
 
   Future<List<String>> crateApiTokenizeLemmaKeysForSurfaces({
     required List<String> surfaces,
@@ -105,6 +112,12 @@ abstract class RustLibApi extends BaseApi {
 
   Future<List<CueTokensDto>> crateApiTokenizeTokenizeCues({
     required List<String> texts,
+  });
+
+  Future<TranslationResult> crateApiTranslateTranslateText({
+    required String text,
+    required String sourceLang,
+    required String targetLang,
   });
 }
 
@@ -173,6 +186,69 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  Future<void> crateApiTranslateInitOfflineTranslate({
+    required List<OfflineModelAsset> assets,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_offline_model_asset(assets, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_translate_error_kind,
+        ),
+        constMeta: kCrateApiTranslateInitOfflineTranslateConstMeta,
+        argValues: [assets],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTranslateInitOfflineTranslateConstMeta =>
+      const TaskConstMeta(
+        debugName: "init_offline_translate",
+        argNames: ["assets"],
+      );
+
+  @override
+  Future<bool> crateApiTranslateIsOfflineTranslateReady() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTranslateIsOfflineTranslateReadyConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTranslateIsOfflineTranslateReadyConstMeta =>
+      const TaskConstMeta(
+        debugName: "is_offline_translate_ready",
+        argNames: [],
+      );
+
+  @override
   Future<List<String>> crateApiTokenizeLemmaKeysForSurfaces({
     required List<String> surfaces,
   }) {
@@ -184,7 +260,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 5,
             port: port_,
           );
         },
@@ -219,7 +295,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 6,
             port: port_,
           );
         },
@@ -254,7 +330,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 7,
             port: port_,
           );
         },
@@ -285,7 +361,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 8,
             port: port_,
           );
         },
@@ -315,7 +391,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 9,
             port: port_,
           );
         },
@@ -332,6 +408,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiTokenizeTokenizeCuesConstMeta =>
       const TaskConstMeta(debugName: "tokenize_cues", argNames: ["texts"]);
+
+  @override
+  Future<TranslationResult> crateApiTranslateTranslateText({
+    required String text,
+    required String sourceLang,
+    required String targetLang,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(text, serializer);
+          sse_encode_String(sourceLang, serializer);
+          sse_encode_String(targetLang, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_translation_result,
+          decodeErrorData: sse_decode_translate_error_kind,
+        ),
+        constMeta: kCrateApiTranslateTranslateTextConstMeta,
+        argValues: [text, sourceLang, targetLang],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTranslateTranslateTextConstMeta =>
+      const TaskConstMeta(
+        debugName: "translate_text",
+        argNames: ["text", "sourceLang", "targetLang"],
+      );
 
   @protected
   String dco_decode_String(dynamic raw) {
@@ -396,6 +509,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<OfflineModelAsset> dco_decode_list_offline_model_asset(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_offline_model_asset).toList();
+  }
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as List<int>;
@@ -411,6 +530,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<TokenDto> dco_decode_list_token_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_token_dto).toList();
+  }
+
+  @protected
+  OfflineModelAsset dco_decode_offline_model_asset(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return OfflineModelAsset(
+      name: dco_decode_String(arr[0]),
+      bytes: dco_decode_list_prim_u_8_strict(arr[1]),
+    );
   }
 
   @protected
@@ -451,6 +582,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       lemmaKey: dco_decode_String(arr[4]),
       isInVocab: dco_decode_bool(arr[5]),
     );
+  }
+
+  @protected
+  TranslateErrorKind dco_decode_translate_error_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TranslateErrorKind.values[raw as int];
+  }
+
+  @protected
+  TranslationResult dco_decode_translation_result(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return TranslationResult(primaryGloss: dco_decode_String(arr[0]));
   }
 
   @protected
@@ -558,6 +704,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<OfflineModelAsset> sse_decode_list_offline_model_asset(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <OfflineModelAsset>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_offline_model_asset(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -581,6 +741,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ans_.add(sse_decode_token_dto(deserializer));
     }
     return ans_;
+  }
+
+  @protected
+  OfflineModelAsset sse_decode_offline_model_asset(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_bytes = sse_decode_list_prim_u_8_strict(deserializer);
+    return OfflineModelAsset(name: var_name, bytes: var_bytes);
   }
 
   @protected
@@ -626,6 +796,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       lemmaKey: var_lemmaKey,
       isInVocab: var_isInVocab,
     );
+  }
+
+  @protected
+  TranslateErrorKind sse_decode_translate_error_kind(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return TranslateErrorKind.values[inner];
+  }
+
+  @protected
+  TranslationResult sse_decode_translation_result(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_primaryGloss = sse_decode_String(deserializer);
+    return TranslationResult(primaryGloss: var_primaryGloss);
   }
 
   @protected
@@ -716,6 +904,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_offline_model_asset(
+    List<OfflineModelAsset> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_offline_model_asset(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_loose(
     List<int> self,
     SseSerializer serializer,
@@ -747,6 +947,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     for (final item in self) {
       sse_encode_token_dto(item, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_offline_model_asset(
+    OfflineModelAsset self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_list_prim_u_8_strict(self.bytes, serializer);
   }
 
   @protected
@@ -787,6 +997,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.tokenIndex, serializer);
     sse_encode_String(self.lemmaKey, serializer);
     sse_encode_bool(self.isInVocab, serializer);
+  }
+
+  @protected
+  void sse_encode_translate_error_kind(
+    TranslateErrorKind self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_translation_result(
+    TranslationResult self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.primaryGloss, serializer);
   }
 
   @protected

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -10,6 +11,7 @@ import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
+import 'package:my_translator_app/data/translate/offline_translate.dart';
 import 'package:my_translator_app/features/reader/cue_time_format.dart';
 import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
 import 'package:my_translator_app/features/reader/reader_screen.dart';
@@ -208,6 +210,7 @@ void main() {
   TokenizeCuesFn? pumpTokenize;
   MarkVocabTokensFn? pumpMark;
   ReaderTranslationPicker? pumpPicker;
+  OfflineTranslateFn? pumpOfflineTranslate;
 
   setUp(() {
     store = MemoryDocumentContentStore();
@@ -224,6 +227,7 @@ void main() {
     pumpTokenize = _emptyTokenize;
     pumpMark = _fakeMarkVocabTokens;
     pumpPicker = null;
+    pumpOfflineTranslate = null;
   });
 
   tearDown(() async {
@@ -259,6 +263,7 @@ void main() {
           tokenizeCues: pumpTokenize,
           markVocabTokens: pumpMark,
           filePicker: pumpPicker,
+          offlineTranslate: pumpOfflineTranslate,
         ),
       ),
     );
@@ -1780,5 +1785,355 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  // --- offline translate (RT-18…RT-25) ---
+
+  Future<void> openAddSheet(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('readerAddVocabCta')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('readerAddVocabSheet')), findsOneWidget);
+  }
+
+  Future<void> openEditSheet(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('readerEditVocabSheet')), findsOneWidget);
+  }
+
+  testWidgets('RT-18: Translate fills Add-sheet translation', (tester) async {
+    var calls = 0;
+    String? lastQuery;
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello world'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) async {
+      calls++;
+      lastQuery = text;
+      return const OfflineTranslateOk(primaryGloss: 'привет');
+    };
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openAddSheet(tester);
+
+    await tester.tap(find.byKey(const Key('readerAddVocabTranslate')));
+    await tester.pumpAndSettle();
+
+    expect(calls, 1);
+    expect(lastQuery, 'hello');
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('readerAddVocabTranslation')),
+    );
+    expect(translation.controller!.text, 'привет');
+    expect(find.byKey(const Key('readerAddVocabSheet')), findsOneWidget);
+    expect(await dictionary.list(), isEmpty);
+
+    final translateBtn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('readerAddVocabTranslate')),
+    );
+    expect(translateBtn.onPressed, isNull);
+
+    final save = tester.widget<FilledButton>(
+      find.byKey(const Key('readerAddVocabSave')),
+    );
+    expect(save.onPressed, isNotNull);
+  });
+
+  testWidgets('RT-19: Translate stays disabled until Add-sheet closes', (
+    tester,
+  ) async {
+    final completer = Completer<OfflineTranslateOutcome>();
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) =>
+        completer.future;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openAddSheet(tester);
+
+    await tester.tap(find.byKey(const Key('readerAddVocabTranslate')));
+    await tester.pump();
+
+    var btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('readerAddVocabTranslate')),
+    );
+    expect(btn.onPressed, isNull);
+
+    completer.complete(const OfflineTranslateOk(primaryGloss: 'привет'));
+    await tester.pumpAndSettle();
+
+    btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('readerAddVocabTranslate')),
+    );
+    expect(btn.onPressed, isNull);
+  });
+
+  testWidgets('RT-20: Translate error on Add-sheet', (tester) async {
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) async =>
+        const OfflineTranslateErr(
+          kind: OfflineTranslateErrorKind.inferenceFailed,
+        );
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openAddSheet(tester);
+
+    await tester.enterText(
+      find.byKey(const Key('readerAddVocabTranslation')),
+      'keep-me',
+    );
+    await tester.tap(find.byKey(const Key('readerAddVocabTranslate')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('readerAddVocabTranslateErrorSnack')),
+      findsOneWidget,
+    );
+    expect(find.text("Couldn't translate. Try again"), findsOneWidget);
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('readerAddVocabTranslation')),
+    );
+    expect(translation.controller!.text, 'keep-me');
+    final btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('readerAddVocabTranslate')),
+    );
+    expect(btn.onPressed, isNull);
+  });
+
+  testWidgets('RT-21: Translate on Edit-sheet fills translation', (
+    tester,
+  ) async {
+    await dictionary.add(
+      lemma: 'hello',
+      surfaceKey: 'hello',
+      translation: 'old',
+    );
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['Hello there'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) async =>
+        const OfflineTranslateOk(primaryGloss: 'привет');
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openEditSheet(tester);
+
+    await tester.tap(find.byKey(const Key('readerEditVocabTranslate')));
+    await tester.pumpAndSettle();
+
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('readerEditVocabTranslation')),
+    );
+    expect(translation.controller!.text, 'привет');
+    expect(find.byKey(const Key('readerEditVocabSheet')), findsOneWidget);
+    final entry = await dictionary.lookup('hello');
+    expect(entry!.translation, 'old');
+
+    final btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('readerEditVocabTranslate')),
+    );
+    expect(btn.onPressed, isNull);
+
+    final save = tester.widget<FilledButton>(
+      find.byKey(const Key('readerEditVocabSave')),
+    );
+    expect(save.onPressed, isNotNull);
+  });
+
+  testWidgets('RT-22: Attribution on Add-sheet', (tester) async {
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) async =>
+        const OfflineTranslateOk(primaryGloss: 'x');
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openAddSheet(tester);
+
+    expect(
+      find.byKey(const Key('readerAddVocabTranslateAttribution')),
+      findsOneWidget,
+    );
+    expect(find.text(kOfflineTranslateAttribution), findsOneWidget);
+    expect(find.text(kOfflineTranslateDisclaimer), findsOneWidget);
+  });
+
+  testWidgets('RT-23: Attribution on Edit-sheet', (tester) async {
+    await dictionary.add(
+      lemma: 'hello',
+      surfaceKey: 'hello',
+      translation: 'привет',
+    );
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['Hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) async =>
+        const OfflineTranslateOk(primaryGloss: 'x');
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openEditSheet(tester);
+
+    expect(
+      find.byKey(const Key('readerEditVocabTranslateAttribution')),
+      findsOneWidget,
+    );
+    expect(find.text(kOfflineTranslateAttribution), findsOneWidget);
+    expect(find.text(kOfflineTranslateDisclaimer), findsOneWidget);
+  });
+
+  testWidgets('RT-24: Translate stays disabled until Edit-sheet closes', (
+    tester,
+  ) async {
+    await dictionary.add(
+      lemma: 'hello',
+      surfaceKey: 'hello',
+      translation: 'old',
+    );
+    final completer = Completer<OfflineTranslateOutcome>();
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['Hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) =>
+        completer.future;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openEditSheet(tester);
+
+    await tester.tap(find.byKey(const Key('readerEditVocabTranslate')));
+    await tester.pump();
+
+    completer.complete(
+      const OfflineTranslateErr(
+        kind: OfflineTranslateErrorKind.engineUnavailable,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('readerEditVocabTranslate')),
+    );
+    expect(btn.onPressed, isNull);
+  });
+
+  testWidgets('RT-25: Translate error on Edit-sheet', (tester) async {
+    await dictionary.add(
+      lemma: 'hello',
+      surfaceKey: 'hello',
+      translation: 'keep-me',
+    );
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['Hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) async =>
+        const OfflineTranslateErr(
+          kind: OfflineTranslateErrorKind.emptyQuery,
+        );
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openEditSheet(tester);
+
+    await tester.tap(find.byKey(const Key('readerEditVocabTranslate')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('readerEditVocabTranslateErrorSnack')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Enter a word or phrase to translate'),
+      findsOneWidget,
+    );
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('readerEditVocabTranslation')),
+    );
+    expect(translation.controller!.text, 'keep-me');
+    final btn = tester.widget<OutlinedButton>(
+      find.byKey(const Key('readerEditVocabTranslate')),
+    );
+    expect(btn.onPressed, isNull);
   });
 }
