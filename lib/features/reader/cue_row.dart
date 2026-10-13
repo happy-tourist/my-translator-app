@@ -47,14 +47,16 @@ class CueRow extends StatelessWidget {
 
   final ValueChanged<int>? onTokenTap;
 
-  /// When false, omit the cue time range (video timeline embeds its own stamp).
+  /// When false, omit the cue time range (video frame slots must not show a
+  /// timestamp under the JPEG — VF-03 / D5).
   final bool showTimestamp;
 
   /// Outer padding; use [EdgeInsets.zero] when embedded under a video frame.
   final EdgeInsetsGeometry padding;
 
-  /// Disambiguates Keys when the same cue is embedded under several video
-  /// seconds (one cue covering `[startMs,endMs)` spanning multiple rows).
+  /// Disambiguates Keys when the same cue is embedded under a frame second
+  /// (`keySuffix: 's$second'` → `…_s12`) so list-pane and under-frame Keys
+  /// never collide (VF-12).
   final String? keySuffix;
 
   String _keyed(String base) =>

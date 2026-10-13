@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:my_translator_app/data/library/document_repository.dart';
 
-/// Injectable JPEG frame cache for the Reader video timeline (design D4 / D9).
+/// Injectable JPEG frame cache for Reader video frame pages (design D4 / D7).
 ///
 /// Production wires DocumentRepository get/put frame cache; tests use
 /// [MemoryVideoFrameCache].

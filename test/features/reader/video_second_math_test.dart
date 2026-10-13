@@ -2,27 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:my_translator_app/features/reader/video_second_math.dart';
 
 void main() {
-  group('VF-02: videoTimelineSecondCount', () {
-    test('duration N sec → N rows for seconds 0..N-1', () {
-      expect(videoTimelineSecondCount(3), 3);
-      expect(videoTimelineSecondCount(9), 9);
-      expect(videoTimelineSecondCount(1), 1);
-      expect(isValidTimelineSecond(0, 3), isTrue);
-      expect(isValidTimelineSecond(2, 3), isTrue);
-      expect(isValidTimelineSecond(3, 3), isFalse);
-      expect(isValidTimelineSecond(-1, 3), isFalse);
-    });
-
-    test('returns 0 when durationSeconds < 1 (VF-11)', () {
-      expect(videoTimelineSecondCount(0), 0);
-      expect(videoTimelineSecondCount(-1), 0);
-      expect(isValidTimelineSecond(0, 0), isFalse);
-    });
-  });
-
   group('VF-05: clampReadingTimeToSecond', () {
     test('floor(readingTimeMs/1000) into [0, durationSeconds-1]', () {
-      // ~10 minutes → second 600
       expect(clampReadingTimeToSecond(600_000, 3600), 600);
       expect(clampReadingTimeToSecond(600_999, 3600), 600);
       expect(clampReadingTimeToSecond(0, 90), 0);
@@ -39,6 +20,15 @@ void main() {
     test('returns -1 when durationSeconds < 1', () {
       expect(clampReadingTimeToSecond(5000, 0), -1);
       expect(clampReadingTimeToSecond(5000, -2), -1);
+    });
+  });
+
+  group('VF-05: clampReadingTimeToPage', () {
+    test('maps clamped second to 1-based page of 3', () {
+      expect(clampReadingTimeToPage(0, 90), 1);
+      expect(clampReadingTimeToPage(1500, 90), 1);
+      expect(clampReadingTimeToPage(3000, 90), 2);
+      expect(clampReadingTimeToPage(600_000, 3600), 201);
     });
   });
 }

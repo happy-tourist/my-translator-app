@@ -21,7 +21,7 @@ import 'package:my_translator_app/features/reader/nearest_cue_index.dart';
 import 'package:my_translator_app/features/reader/reader_screen.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/features/reader/video_frame_cache.dart';
-import 'package:my_translator_app/features/reader/video_second_timeline.dart';
+import 'package:my_translator_app/features/reader/video_frame_pages.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart';
 import 'package:my_translator_app/src/rust/api/tokenize.dart';
 
@@ -2191,7 +2191,7 @@ void main() {
     expect(btn.onPressed, isNull);
   });
 
-  // --- reader/video-frames (VF-01…VF-13 revision: interleaved timeline) ---
+  // --- reader/video-frames (VF-01…VF-13 revision: paged vertical triple) ---
 
   Future<void> pumpVideoUi(WidgetTester tester) async {
     await tester.pump();
@@ -2199,13 +2199,13 @@ void main() {
     await tester.pump();
   }
 
-  VideoSecondTimelineState timelineState(WidgetTester tester) {
-    return tester.state<VideoSecondTimelineState>(
-      find.byType(VideoSecondTimeline),
+  VideoFramePagesState pagesState(WidgetTester tester) {
+    return tester.state<VideoFramePagesState>(
+      find.byType(VideoFramePages),
     );
   }
 
-  testWidgets('VF-01: Load video replaces cues with second timeline', (
+  testWidgets('VF-01: Load video replaces cues with paged column of 3', (
     tester,
   ) async {
     final original = await seedOriginal();
@@ -2215,20 +2215,27 @@ void main() {
     await pumpVideoUi(tester);
 
     expect(find.byKey(const Key('readerCueList')), findsOneWidget);
+    expect(find.byKey(const Key('videoFramePages')), findsNothing);
     expect(find.byKey(const Key('videoSecondTimeline')), findsNothing);
     expect(find.byKey(const Key('videoFrameStrip')), findsNothing);
 
     await tester.tap(find.byKey(const Key('readerLoadVideo')));
     await pumpVideoUi(tester);
 
-    expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
+    expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
+    expect(find.byKey(const Key('videoSecondTimeline')), findsNothing);
     expect(find.byKey(const Key('videoFrameStrip')), findsNothing);
     expect(find.byKey(const Key('readerCueList')), findsNothing);
-    expect(find.byKey(const Key('videoSecondRow_0')), findsOneWidget);
+    expect(find.byKey(const Key('videoFrameSlot_0')), findsOneWidget);
+    expect(find.byKey(const Key('videoFrameSlot_1')), findsOneWidget);
+    expect(find.byKey(const Key('videoFrameSlot_2')), findsOneWidget);
+    expect(find.byKey(const Key('videoFramePagesNext')), findsOneWidget);
     expect(await documents.getVideoAttachment(original.id), isNotNull);
   });
 
-  testWidgets('VF-05: Load jumps to current reading time', (tester) async {
+  testWidgets('VF-05: Load jumps to page for current reading time', (
+    tester,
+  ) async {
     final original = await seedOriginal();
     pumpOriginalDocumentId = original.id;
     pumpCues = _sampleCues(count: 700, startStepMs: 1000);
@@ -2242,17 +2249,16 @@ void main() {
     await pumpVideoUi(tester);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
+    expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
+    expect(pagesState(tester).currentPage, 201); // seconds 600..602
     expect(
-      (timelineState(tester).currentSecond - 600).abs(),
+      (pagesState(tester).currentSecond - 600).abs(),
       lessThanOrEqualTo(2),
     );
-    expect(find.byKey(const Key('videoSecondRow_600')), findsOneWidget);
+    expect(find.byKey(const Key('videoFrameSlot_600')), findsOneWidget);
   });
 
-  testWidgets('VF-06: Original timeline scroll syncs translation', (
-    tester,
-  ) async {
+  testWidgets('VF-06: Original page change syncs translation', (tester) async {
     final original = await seedOriginal();
     pumpOriginalDocumentId = original.id;
     pumpCues = _sampleCues(count: 40, startStepMs: 1000);
@@ -2270,7 +2276,7 @@ void main() {
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await pumpVideoUi(tester);
 
-    timelineState(tester).jumpToSecond(12);
+    pagesState(tester).jumpToSecond(12);
     await pumpVideoUi(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
@@ -2279,7 +2285,7 @@ void main() {
     expect(find.text('Tr 12'), findsOneWidget);
   });
 
-  testWidgets('VF-07: Bottom scroll does not move original timeline', (
+  testWidgets('VF-07: Bottom scroll does not move original page', (
     tester,
   ) async {
     final original = await seedOriginal();
@@ -2299,9 +2305,11 @@ void main() {
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await pumpVideoUi(tester);
 
-    timelineState(tester).jumpToSecond(8);
+    pagesState(tester).jumpToSecond(8);
     await pumpVideoUi(tester);
-    expect(timelineState(tester).currentSecond, 8);
+    // Page containing 8 → seconds 6..8; currentSecond = page first.
+    expect(pagesState(tester).currentPage, 3);
+    expect(pagesState(tester).currentSecond, 6);
 
     await tester.drag(
       find.byKey(const Key('readerTranslationCueList')),
@@ -2310,7 +2318,8 @@ void main() {
     await pumpVideoUi(tester);
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(timelineState(tester).currentSecond, 8);
+    expect(pagesState(tester).currentPage, 3);
+    expect(pagesState(tester).currentSecond, 6);
   });
 
   testWidgets('VF-08: Remove video restores cue list at same second', (
@@ -2325,14 +2334,14 @@ void main() {
 
     await tester.tap(find.byKey(const Key('readerLoadVideo')));
     await pumpVideoUi(tester);
-    timelineState(tester).jumpToSecond(15);
+    pagesState(tester).jumpToSecond(15);
     await pumpVideoUi(tester);
 
     await tester.tap(find.byKey(const Key('readerRemoveVideo')));
     await pumpVideoUi(tester);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byKey(const Key('videoSecondTimeline')), findsNothing);
+    expect(find.byKey(const Key('videoFramePages')), findsNothing);
     expect(find.byKey(const Key('readerCueList')), findsOneWidget);
     expect(await documents.getVideoAttachment(original.id), isNull);
 
@@ -2360,28 +2369,32 @@ void main() {
 
     await tester.tap(find.byKey(const Key('readerLoadVideo')));
     await pumpVideoUi(tester);
-    timelineState(tester).jumpToSecond(2);
-    await pumpVideoUi(tester);
 
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await pumpVideoUi(tester);
 
-    expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
-    expect(timelineState(tester).currentSecond, 2);
+    expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
+    expect(pagesState(tester).currentPage, 1);
     expect(find.byKey(const Key('readerTranslationCueList')), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const Key('readerTranslationCueList')),
-        matching: find.byKey(const Key('videoSecondRow_0')),
+        matching: find.byKey(const Key('videoFramePages')),
       ),
       findsNothing,
     );
-    expect(find.byKey(const Key('videoSecondRow_2')), findsWidgets);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerTranslationCueList')),
+        matching: find.byKey(const Key('videoFrameSlot_0')),
+      ),
+      findsNothing,
+    );
+    // Split shortens original viewport — at least slot 0 is built.
+    expect(find.byKey(const Key('videoFrameSlot_0')), findsOneWidget);
   });
 
-  testWidgets('VF-11: Failed probe shows error and no timeline', (
-    tester,
-  ) async {
+  testWidgets('VF-11: Failed probe shows error and no pages', (tester) async {
     final original = await seedOriginal();
     pumpOriginalDocumentId = original.id;
     wireFakeVideo(
@@ -2393,7 +2406,7 @@ void main() {
     await tester.tap(find.byKey(const Key('readerLoadVideo')));
     await pumpVideoUi(tester);
 
-    expect(find.byKey(const Key('videoSecondTimeline')), findsNothing);
+    expect(find.byKey(const Key('videoFramePages')), findsNothing);
     expect(find.byKey(const Key('readerCueList')), findsOneWidget);
     expect(find.byKey(const Key('readerVideoErrorSnack')), findsOneWidget);
   });
@@ -2403,11 +2416,12 @@ void main() {
   ) async {
     final original = await seedOriginal();
     pumpOriginalDocumentId = original.id;
+    // round(400/1000)=0 → text under second 0 on page 1.
     pumpCues = [
       CueDto(
         index: 0,
         startMs: BigInt.from(0),
-        endMs: BigInt.from(1000),
+        endMs: BigInt.from(400),
         textLines: ['hello world'],
       ),
     ];
@@ -2418,9 +2432,9 @@ void main() {
 
     await tester.tap(find.byKey(const Key('readerLoadVideo')));
     await pumpVideoUi(tester);
-    expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
+    expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
 
-    // Token Keys are suffixed by timeline second when embedded under frames.
+    // Token Keys are suffixed by frame second when embedded under frames.
     await tester.tap(find.byKey(const Key('readerCueToken_0_0_s0')));
     await pumpVideoUi(tester);
 
@@ -2428,7 +2442,9 @@ void main() {
     expect(find.byKey(const Key('readerCueToken_0_0_s0')), findsOneWidget);
   });
 
-  testWidgets('VF-13: Restore jumps to last_second not zero', (tester) async {
+  testWidgets('VF-13: Restore jumps to page for last_second not zero', (
+    tester,
+  ) async {
     final original = await seedOriginal();
     await documents.attachVideo(
       documentId: original.id,
@@ -2445,13 +2461,14 @@ void main() {
     await pumpVideoUi(tester);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
-    expect(timelineState(tester).currentSecond, 45);
-    expect(find.byKey(const Key('videoSecondRow_45')), findsOneWidget);
+    expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
+    expect(pagesState(tester).currentPage, 16); // seconds 45..47
+    expect(pagesState(tester).currentSecond, 45);
+    expect(find.byKey(const Key('videoFrameSlot_45')), findsOneWidget);
   });
 
   testWidgets(
-    'LD-19: Open with initialVideoAttachment restores timeline',
+    'LD-19: Open with initialVideoAttachment restores pages',
     (tester) async {
       final original = await seedOriginal();
       await documents.attachVideo(
@@ -2468,8 +2485,10 @@ void main() {
       await pumpReader(tester);
       await pumpVideoUi(tester);
 
-      expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
-      expect(timelineState(tester).currentSecond, 2);
+      expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
+      expect(pagesState(tester).currentPage, 1);
+      expect(pagesState(tester).currentSecond, 0);
+      expect(find.byKey(const Key('videoFrameSlot_2')), findsOneWidget);
     },
   );
 
@@ -2509,7 +2528,7 @@ void main() {
       await pumpReader(tester);
       await pumpVideoUi(tester);
 
-      expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
+      expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
       expect(
         await documents.getFrameCache(documentId: original.id, second: 0),
         isNotNull,
@@ -2520,7 +2539,7 @@ void main() {
 
       final attachment = await documents.getVideoAttachment(original.id);
       expect(attachment!.videoUri, 'file:///tmp/repick.mp4');
-      expect(find.byKey(const Key('videoSecondTimeline')), findsOneWidget);
+      expect(find.byKey(const Key('videoFramePages')), findsOneWidget);
       // Same duration re-pick must keep prior JPEG (LD-22).
       expect(
         await documents.getFrameCache(documentId: original.id, second: 0),
