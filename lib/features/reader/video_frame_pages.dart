@@ -1,5 +1,4 @@
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'package:my_translator_app/data/video/video_frame_extractor.dart';
@@ -8,10 +7,12 @@ import 'package:my_translator_app/features/reader/video_frame_cache.dart';
 import 'package:my_translator_app/features/reader/video_second_math.dart';
 import 'package:my_translator_app/src/rust/api/parse.dart';
 
-/// Paged vertical triple of video frames for Reader original pane (VF-01…VF-10).
+/// Paged vertical triple of video frames for Reader original pane (VF-01…VF-15).
 ///
-/// Replaces the cue list: one page = up to three stacked seconds + pager arrows.
-/// No timestamp under frames. Injectable [extractor] / [cache] for tests.
+/// Replaces the cue list: one page = up to three stacked seconds; pager chrome
+/// pinned under the frame list (VF-14). Page change scrolls to the first slot
+/// (VF-15). Cue timestamps come from [buildCueText] / CueRow when text is
+/// present (VF-03/VF-04). Injectable [extractor] / [cache] for tests.
 class VideoFramePages extends StatefulWidget {
   const VideoFramePages({
     super.key,
@@ -62,6 +63,7 @@ class VideoFramePages extends StatefulWidget {
 class VideoFramePagesState extends State<VideoFramePages> {
   late int _page;
   late int _pageCount;
+  final ScrollController _listScrollController = ScrollController();
 
   /// Second → JPEG bytes, loading, or fail sentinel.
   final Map<int, _SlotImage> _images = {};
@@ -70,6 +72,10 @@ class VideoFramePagesState extends State<VideoFramePages> {
   int get currentPage => _page;
 
   int get pageCount => _pageCount;
+
+  /// Frame-list scroll controller (tests / VF-15 offset checks).
+  @visibleForTesting
+  ScrollController get listScrollController => _listScrollController;
 
   /// First whole second on the current page (sync / remove anchor).
   int get currentSecond {
@@ -89,6 +95,12 @@ class VideoFramePagesState extends State<VideoFramePages> {
   }
 
   @override
+  void dispose() {
+    _listScrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(covariant VideoFramePages oldWidget) {
     super.didUpdateWidget(oldWidget);
     final refChanged = oldWidget.videoRef != widget.videoRef;
@@ -101,6 +113,7 @@ class VideoFramePagesState extends State<VideoFramePages> {
       _images.clear();
       _loadGeneration++;
       _scheduleLoadCurrentPage();
+      _scrollListToFirstSlot();
     } else if (oldWidget.originalCues != widget.originalCues) {
       setState(() {});
     } else if (oldWidget.initialSecond != widget.initialSecond &&
@@ -127,7 +140,7 @@ class VideoFramePagesState extends State<VideoFramePages> {
     return page;
   }
 
-  /// Jump to 1-based [page] (clamped).
+  /// Jump to 1-based [page] (clamped). Scrolls list to first slot (VF-15).
   void goToPage(int page) {
     final next = _clampPage(page);
     if (next == _page) return;
@@ -136,6 +149,24 @@ class VideoFramePagesState extends State<VideoFramePages> {
     });
     widget.onPageChanged?.call(_page);
     _scheduleLoadCurrentPage();
+    _scrollListToFirstSlot();
+  }
+
+  /// VF-15: after page change, first frame of the new page is visible.
+  void _scrollListToFirstSlot() {
+    void jump() {
+      if (!mounted) return;
+      if (!_listScrollController.hasClients) return;
+      _listScrollController.jumpTo(0);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      jump();
+      // ListView may attach one frame later after page rebuild (VF-15 race).
+      if (mounted && !_listScrollController.hasClients) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => jump());
+      }
+    });
   }
 
   /// Jump to the page containing whole-second [second] (VF-05 / VF-13).
@@ -210,14 +241,31 @@ class VideoFramePagesState extends State<VideoFramePages> {
     final canPrev = _page > 1;
     final canNext = _page < _pageCount;
 
+    // VF-14: pager chrome pinned under the scrollable frame list.
     return Material(
       key: const Key('videoFramePages'),
       color: theme.colorScheme.surface,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Expanded(
+            child: ListView.builder(
+              controller: _listScrollController,
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+              itemCount: seconds.length,
+              itemBuilder: (context, index) {
+                final second = seconds[index];
+                return _FrameSlot(
+                  second: second,
+                  image: _images[second],
+                  cueText: cueTextAtSecond(widget.originalCues, second),
+                  buildCueText: widget.buildCueText,
+                );
+              },
+            ),
+          ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
             child: Row(
               children: [
                 IconButton(
@@ -241,21 +289,6 @@ class VideoFramePagesState extends State<VideoFramePages> {
                   icon: const Icon(Icons.chevron_right),
                 ),
               ],
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-              itemCount: seconds.length,
-              itemBuilder: (context, index) {
-                final second = seconds[index];
-                return _FrameSlot(
-                  second: second,
-                  image: _images[second],
-                  cueText: cueTextAtSecond(widget.originalCues, second),
-                  buildCueText: widget.buildCueText,
-                );
-              },
             ),
           ),
         ],
@@ -362,7 +395,8 @@ class _FrameSlot extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          // VF-03 / D5: no timestamp under frames — text area only (may be empty).
+          // VF-03/VF-04: empty → no time label; with text, buildCueText may
+          // embed CueRow(showTimestamp: true) for file start→end.
           if (customText != null)
             customText(context, second, cueText)
           else

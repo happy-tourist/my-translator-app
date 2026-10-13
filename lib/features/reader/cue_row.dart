@@ -47,8 +47,9 @@ class CueRow extends StatelessWidget {
 
   final ValueChanged<int>? onTokenTap;
 
-  /// When false, omit the cue time range (video frame slots must not show a
-  /// timestamp under the JPEG — VF-03 / D5).
+  /// When false, omit the cue time range. Under video frames with cue text,
+  /// pass `true` so file `startMs → endMs` shows (VF-04 / D5); empty slots
+  /// omit CueRow entirely (VF-03).
   final bool showTimestamp;
 
   /// Outer padding; use [EdgeInsets.zero] when embedded under a video frame.

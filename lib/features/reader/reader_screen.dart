@@ -1421,7 +1421,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// Cue text under a frame with tap/highlight when tokenize is ready (VF-12).
   ///
-  /// End-second rule may attach several cues to one second — stack CueRows.
+  /// End-second rule may attach several cues to one second — stack CueRows
+  /// with `showTimestamp: true` (file start→end, VF-04). Empty slot → no
+  /// timestamp (VF-03).
   Widget _buildVideoCueText(
     BuildContext context,
     int second,
@@ -1459,7 +1461,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           onTokenTap: tokensReady && tokens != null && tokens.isNotEmpty
               ? (tokenIndex) => _onOriginalTokenTap(cueIndex, tokenIndex)
               : null,
-          showTimestamp: false,
+          showTimestamp: true,
           padding: EdgeInsets.zero,
           keySuffix: 's$second',
         ),
