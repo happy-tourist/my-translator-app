@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show AnyhowException, PanicException;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -139,14 +140,28 @@ class ReaderScreen extends StatefulWidget {
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
 
+/// In-memory tokenize(+mark) cache for one EPUB chapter (D12 / RC-09).
+class _ChapterTokenCache {
+  const _ChapterTokenCache({required this.tokens, required this.markReady});
+
+  final List<rust_tokenize.CueTokensDto> tokens;
+  final bool markReady;
+}
+
 class _ReaderScreenState extends State<ReaderScreen> {
   static const double _dividerHandleHeight = 16;
   static const double _minRatio = 0.2;
   static const double _maxRatio = 0.8;
   static const Duration _gapFlashDuration = Duration(milliseconds: 300);
 
+  /// First-pass paragraph count before idle remainder (D12 / RC-08).
+  static const int _bookTokenizePrefixCount = 4;
+
   var _splitEnabled = false;
+  /// Subtitle split still uses this field with setState; book split uses
+  /// [_bookDividerRatio] (D13 / RS-17).
   var _dividerRatio = 0.5;
+  final ValueNotifier<double> _bookDividerRatio = ValueNotifier(0.5);
   var _syncing = false;
   var _userInitiatedScroll = false;
   var _loadingTranslation = false;
@@ -175,8 +190,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   final _videoPagesKey = GlobalKey<VideoFramePagesState>();
 
   /// Batch tokenize+mark cache (D5). Null while in-flight or after failure.
+  /// Book mode: current chapter view; also keyed in [_chapterTokenCache].
   List<rust_tokenize.CueTokensDto>? _cueTokensByIndex;
   var _tokenizeReady = false;
+
+  /// Session cache: chapterIndex → tokenize(+mark) (D12 / RC-09). Not persisted.
+  final Map<int, _ChapterTokenCache> _chapterTokenCache = {};
 
   /// Invalidates in-flight tokenize/mark when chapter changes (book mode) or a
   /// newer batch starts — prevents stale FRB results from binding wrong text.
@@ -292,6 +311,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   @override
   void dispose() {
     _flashTimer?.cancel();
+    _bookDividerRatio.dispose();
     // RS-12 / D10: best-effort save on pop/dispose (do not block).
     // Force: skip `_syncing` guard — pop must still persist even mid-sync.
     unawaited(_persistReadingAnchor(force: true));
@@ -319,14 +339,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _runBatchTokenize() async {
-    // Book mode: paragraph strings of the current chapter (D4 / RC-04).
-    // Subtitle mode: cue display strings.
+    if (_isBookMode) {
+      await _runBookChapterTokenize();
+      return;
+    }
+    // Subtitle mode: cue display strings (full batch).
     final generation = ++_tokenizeGeneration;
-    final texts = _isBookMode
-        ? List<String>.from(_currentChapterParagraphs)
-        : widget.originalCues
-            .map((c) => c.textLines.join('\n'))
-            .toList(growable: false);
+    final texts = widget.originalCues
+        .map((c) => c.textLines.join('\n'))
+        .toList(growable: false);
     if (texts.isEmpty) {
       if (!mounted || generation != _tokenizeGeneration) return;
       setState(() {
@@ -386,6 +407,157 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  int get _currentChapterIndexClamped {
+    final chapters = _originalChapters;
+    if (chapters.isEmpty) return 0;
+    return _chapterIndex.clamp(0, chapters.length - 1);
+  }
+
+  /// Progressive tokenize + chapter cache for EPUB (D12 / RC-08 / RC-09).
+  Future<void> _runBookChapterTokenize() async {
+    final chapterIndex = _currentChapterIndexClamped;
+    final generation = ++_tokenizeGeneration;
+    final texts = List<String>.from(_currentChapterParagraphs);
+
+    final hit = _chapterTokenCache[chapterIndex];
+    if (hit != null) {
+      if (!mounted || generation != _tokenizeGeneration) return;
+      setState(() {
+        _cueTokensByIndex = hit.tokens;
+        _tokenizeReady = true;
+      });
+      if (!hit.markReady) {
+        await _markBookChapterTokens(
+          chapterIndex: chapterIndex,
+          tokens: hit.tokens,
+          generation: generation,
+        );
+      }
+      return;
+    }
+
+    if (texts.isEmpty) {
+      if (!mounted || generation != _tokenizeGeneration) return;
+      setState(() {
+        _cueTokensByIndex = const [];
+        _tokenizeReady = true;
+      });
+      _chapterTokenCache[chapterIndex] = const _ChapterTokenCache(
+        tokens: [],
+        markReady: true,
+      );
+      return;
+    }
+
+    try {
+      final prefixLen = texts.length <= _bookTokenizePrefixCount
+          ? texts.length
+          : _bookTokenizePrefixCount;
+
+      // Phase 1: prefix — tap-ready early (RC-08); highlight MAY lag.
+      final prefixResult = await _tokenize(texts.sublist(0, prefixLen));
+      if (!mounted || generation != _tokenizeGeneration) return;
+      var working = _normalizeCueTokensCache(prefixResult, texts.length);
+      setState(() {
+        _cueTokensByIndex = working;
+        _tokenizeReady = true;
+      });
+
+      // Phase 2: remainder after a frame / idle yield (D12).
+      if (prefixLen < texts.length) {
+        await SchedulerBinding.instance.scheduleTask(
+          () {},
+          Priority.idle,
+        );
+        if (!mounted || generation != _tokenizeGeneration) return;
+        final restResult = await _tokenize(texts.sublist(prefixLen));
+        if (!mounted || generation != _tokenizeGeneration) return;
+        final remapped = [
+          for (final dto in restResult)
+            rust_tokenize.CueTokensDto(
+              cueIndex: dto.cueIndex + prefixLen,
+              tokens: dto.tokens,
+            ),
+        ];
+        // Merge prefix slots + remapped rest into a full-length cache.
+        final merged = List<rust_tokenize.CueTokensDto>.from(working);
+        for (final dto in remapped) {
+          if (dto.cueIndex >= 0 && dto.cueIndex < merged.length) {
+            merged[dto.cueIndex] = dto;
+          }
+        }
+        working = merged;
+        setState(() {
+          _cueTokensByIndex = working;
+        });
+      }
+
+      // Cache tokenize before mark so pager return is a hit even if mark lags.
+      _chapterTokenCache[chapterIndex] = _ChapterTokenCache(
+        tokens: working,
+        markReady: false,
+      );
+      await _markBookChapterTokens(
+        chapterIndex: chapterIndex,
+        tokens: working,
+        generation: generation,
+      );
+    } on AnyhowException catch (e) {
+      assert(() {
+        debugPrint('tokenizeCues Anyhow: ${e.message}');
+        return true;
+      }());
+      _failTokenizeBatch(generation);
+    } on PanicException catch (e) {
+      assert(() {
+        debugPrint('tokenizeCues panic: ${e.message}');
+        return true;
+      }());
+      _failTokenizeBatch(generation);
+    } catch (e, st) {
+      assert(() {
+        debugPrint('tokenizeCues failed: $e\n$st');
+        return true;
+      }());
+      _failTokenizeBatch(generation);
+    }
+  }
+
+  Future<void> _markBookChapterTokens({
+    required int chapterIndex,
+    required List<rust_tokenize.CueTokensDto> tokens,
+    required int generation,
+  }) async {
+    try {
+      final lemmas = (await widget.dictionaryRepository.list())
+          .map((e) => e.lemma)
+          .toList(growable: false);
+      if (!mounted || generation != _tokenizeGeneration) return;
+      final marked = await _mark(cues: tokens, vocabLemmas: lemmas);
+      if (!mounted || generation != _tokenizeGeneration) return;
+      final normalized = _normalizeCueTokensCache(marked, tokens.length);
+      setState(() {
+        _cueTokensByIndex = normalized;
+        _tokenizeReady = true;
+      });
+      _chapterTokenCache[chapterIndex] = _ChapterTokenCache(
+        tokens: normalized,
+        markReady: true,
+      );
+    } catch (e, st) {
+      assert(() {
+        debugPrint('markVocabTokens on open failed: $e\n$st');
+        return true;
+      }());
+      if (!mounted || generation != _tokenizeGeneration) return;
+      _chapterTokenCache[chapterIndex] = _ChapterTokenCache(
+        tokens: tokens,
+        markReady: false,
+      );
+      _showMarkRefreshError();
+    }
+  }
+
   /// Re-read Drift morph lemmas → markVocabTokens on live cache (D5 / RH-03/04).
   Future<void> _refreshVocabMarks() async {
     final cache = _cueTokensByIndex;
@@ -398,10 +570,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (!mounted || generation != _tokenizeGeneration) return;
       final marked = await _mark(cues: cache, vocabLemmas: lemmas);
       if (!mounted || generation != _tokenizeGeneration) return;
+      final normalized = _normalizeCueTokensCache(marked, cache.length);
       setState(() {
-        _cueTokensByIndex =
-            _normalizeCueTokensCache(marked, cache.length);
+        _cueTokensByIndex = normalized;
       });
+      if (_isBookMode) {
+        final chapterIndex = _currentChapterIndexClamped;
+        _chapterTokenCache[chapterIndex] = _ChapterTokenCache(
+          tokens: normalized,
+          markReady: true,
+        );
+        // Other chapters: keep tokens, force re-mark on next visit (D12).
+        for (final key in _chapterTokenCache.keys.toList()) {
+          if (key == chapterIndex) continue;
+          final entry = _chapterTokenCache[key]!;
+          _chapterTokenCache[key] = _ChapterTokenCache(
+            tokens: entry.tokens,
+            markReady: false,
+          );
+        }
+      }
     } catch (e, st) {
       assert(() {
         debugPrint('markVocabTokens refresh failed: $e\n$st');
@@ -630,8 +818,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _chapterIndex = clamped;
       if (origChapterChanged) {
         _clearSelection(updateState: false);
-        _cueTokensByIndex = null;
-        _tokenizeReady = false;
+        // RC-09: restore from session cache when available; else clear until batch.
+        final cached = _chapterTokenCache[nextOrig];
+        if (cached != null) {
+          _cueTokensByIndex = cached.tokens;
+          _tokenizeReady = true;
+        } else {
+          _cueTokensByIndex = null;
+          _tokenizeReady = false;
+        }
         // Invalidate in-flight tokenize before starting the next batch so a
         // slower chapter-A response cannot bind onto chapter-B paragraphs.
         _tokenizeGeneration++;
@@ -639,6 +834,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
     // ListView key includes chapter index → remount resets scroll to start (RC-02).
     if (origChapterChanged) {
+      // Cache hit still runs through _runBookChapterTokenize for optional re-mark.
       unawaited(_runBatchTokenize());
     }
     // Persist chapter index on pager settle (LD-28 / RC-06); not nearestCueIndex.
@@ -1736,6 +1932,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             : null,
                     // D4 / RC-04: no timed cue chrome on paragraphs.
                     showTimestamp: false,
+                    // D11 / RC-07: TextSpan + one gesture; no WidgetSpan-per-word.
+                    lightweightHitTest: true,
                   );
                 },
               ),
@@ -1781,64 +1979,77 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Widget _buildBookSplitBody() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final usable = constraints.maxHeight - _dividerHandleHeight;
-        final needsDeleteChrome =
-            _hasTranslationChapters || _hasLinkedTranslation;
-        final ratioMin = usable * _minRatio;
-        final chromeFloor = usable < kMinInteractiveDimension
-            ? usable
-            : kMinInteractiveDimension.toDouble();
-        final minBottom = needsDeleteChrome && chromeFloor > ratioMin
-            ? chromeFloor
-            : ratioMin;
-        final maxTop = (usable - minBottom).clamp(0.0, usable);
-        final minTop = ratioMin > maxTop ? maxTop : ratioMin;
-        final rawTop = usable * _dividerRatio;
-        final topH = rawTop < minTop
-            ? minTop
-            : (rawTop > maxTop ? maxTop : rawTop);
-        final bottomH = usable - topH;
+        // Build panes outside ValueListenableBuilder so drag only changes
+        // SizedBox heights (D13 / RS-17) — same child widget instances reused.
+        final topPane = _buildBookPane();
+        final bottomPane = _buildBookBottomPane();
+        final dividerColor =
+            Theme.of(context).colorScheme.surfaceContainerHighest;
+        final outlineColor = Theme.of(context).colorScheme.outline;
 
-        return Column(
-          children: [
-            SizedBox(
-              height: topH,
-              child: _buildBookPane(),
-            ),
-            GestureDetector(
-              key: const Key('readerSplitDivider'),
-              behavior: HitTestBehavior.opaque,
-              onVerticalDragUpdate: (details) {
-                final h = constraints.maxHeight;
-                if (h <= 0) return;
-                setState(() {
-                  _dividerRatio = (_dividerRatio + details.delta.dy / h)
-                      .clamp(_minRatio, _maxRatio);
-                });
-              },
-              child: Material(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: SizedBox(
-                  height: _dividerHandleHeight,
-                  width: double.infinity,
-                  child: Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.outline,
-                        borderRadius: BorderRadius.circular(2),
+        return ValueListenableBuilder<double>(
+          valueListenable: _bookDividerRatio,
+          builder: (context, ratio, _) {
+            final usable = constraints.maxHeight - _dividerHandleHeight;
+            final needsDeleteChrome =
+                _hasTranslationChapters || _hasLinkedTranslation;
+            final ratioMin = usable * _minRatio;
+            final chromeFloor = usable < kMinInteractiveDimension
+                ? usable
+                : kMinInteractiveDimension.toDouble();
+            final minBottom = needsDeleteChrome && chromeFloor > ratioMin
+                ? chromeFloor
+                : ratioMin;
+            final maxTop = (usable - minBottom).clamp(0.0, usable);
+            final minTop = ratioMin > maxTop ? maxTop : ratioMin;
+            final rawTop = usable * ratio;
+            final topH = rawTop < minTop
+                ? minTop
+                : (rawTop > maxTop ? maxTop : rawTop);
+            final bottomH = usable - topH;
+
+            return Column(
+              children: [
+                SizedBox(
+                  height: topH,
+                  child: topPane,
+                ),
+                GestureDetector(
+                  key: const Key('readerSplitDivider'),
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: (details) {
+                    final h = constraints.maxHeight;
+                    if (h <= 0) return;
+                    // No setState — heights via notifier only (D13 / RS-17).
+                    _bookDividerRatio.value =
+                        (_bookDividerRatio.value + details.delta.dy / h)
+                            .clamp(_minRatio, _maxRatio);
+                  },
+                  child: Material(
+                    color: dividerColor,
+                    child: SizedBox(
+                      height: _dividerHandleHeight,
+                      width: double.infinity,
+                      child: Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: outlineColor,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
-            SizedBox(
-              height: bottomH,
-              child: _buildBookBottomPane(),
-            ),
-          ],
+                SizedBox(
+                  height: bottomH,
+                  child: bottomPane,
+                ),
+              ],
+            );
+          },
         );
       },
     );

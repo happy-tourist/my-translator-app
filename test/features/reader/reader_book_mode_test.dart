@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:my_translator_app/app/theme.dart';
 import 'package:my_translator_app/data/database/app_database.dart';
@@ -15,6 +17,47 @@ import 'package:my_translator_app/src/rust/api/epub.dart';
 import 'package:my_translator_app/src/rust/api/tokenize.dart';
 
 import '../../support/test_database.dart';
+
+/// UTF-16 offset for a Unicode scalar index (matches TextPainter / RenderParagraph).
+int _charIndexToUtf16(String text, int charIndex) {
+  if (charIndex <= 0) return 0;
+  final runes = text.runes.toList();
+  if (charIndex >= runes.length) return text.length;
+  return String.fromCharCodes(runes.take(charIndex)).length;
+}
+
+/// Tap a book-mode token without requiring `readerCueToken_*` Widget Keys (D11).
+Future<void> _tapBookToken(
+  WidgetTester tester, {
+  required int cueIndex,
+  required int tokenIndex,
+  required String paragraph,
+}) async {
+  final tokens = _tokensFor(paragraph);
+  final token = tokens.firstWhere((t) => t.tokenIndex == tokenIndex);
+  final finder = find.byKey(Key('readerCueText_$cueIndex'));
+  expect(finder, findsOneWidget);
+  final box = tester.renderObject(finder) as RenderParagraph;
+  final utf16Start = _charIndexToUtf16(paragraph, token.charStart);
+  final utf16End = _charIndexToUtf16(paragraph, token.charEnd);
+  final List<TextBox> boxes = box.getBoxesForSelection(
+    TextSelection(baseOffset: utf16Start, extentOffset: utf16End),
+  );
+  expect(boxes, isNotEmpty);
+  final center = boxes.first.toRect().center;
+  await tester.tapAt(box.localToGlobal(center));
+  await tester.pumpAndSettle();
+}
+
+bool _paragraphTextHasWidgetSpan(InlineSpan span) {
+  if (span is WidgetSpan) return true;
+  if (span is TextSpan && span.children != null) {
+    for (final child in span.children!) {
+      if (_paragraphTextHasWidgetSpan(child)) return true;
+    }
+  }
+  return false;
+}
 
 List<EpubChapterDto> _sampleChapters() => [
       const EpubChapterDto(
@@ -179,8 +222,9 @@ void main() {
     // Paragraphs rendered via CueRow (± tokens) — find by cue keys / words.
     expect(find.byKey(const Key('readerCue_0')), findsOneWidget);
     expect(find.byKey(const Key('readerCue_1')), findsOneWidget);
-    expect(find.text('fox'), findsWidgets);
-    expect(find.text('woods'), findsOneWidget);
+    // Book Text.rich: word surfaces are TextSpans, not separate Text widgets.
+    expect(find.textContaining('fox'), findsWidgets);
+    expect(find.textContaining('woods'), findsOneWidget);
     // Not a timed subtitle cue list.
     expect(find.byKey(const Key('readerCueList')), findsNothing);
     expect(find.byKey(const Key('readerCueTime_0')), findsNothing);
@@ -200,8 +244,8 @@ void main() {
     expect(find.text('2 / 3'), findsOneWidget);
     expect(find.text('Chapter Two'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_1')), findsOneWidget);
-    expect(find.text('rabbit'), findsOneWidget);
-    expect(find.text('woods'), findsNothing);
+    expect(find.textContaining('rabbit'), findsOneWidget);
+    expect(find.textContaining('woods'), findsNothing);
 
     await tester.tap(find.byKey(const Key('readerBookChapterPrev')));
     await tester.pumpAndSettle();
@@ -256,14 +300,133 @@ void main() {
     await pumpBookReader(tester);
 
     expect(find.byKey(const Key('readerCueTime_0')), findsNothing);
-    expect(find.byKey(const Key('readerCueToken_0_0')), findsOneWidget);
+    // Book mode: no per-token Widget Keys (D11); tap via char→token hit-test.
+    expect(find.byKey(const Key('readerCueToken_0_0')), findsNothing);
     expect(find.byKey(const Key('readerAddVocabCta')), findsNothing);
 
-    await tester.tap(find.byKey(const Key('readerCueToken_0_0')));
-    await tester.pumpAndSettle();
+    await _tapBookToken(
+      tester,
+      cueIndex: 0,
+      tokenIndex: 0,
+      paragraph: 'Once upon a time there was a fox.',
+    );
 
     expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
     expect(find.text('Add to vocabulary'), findsOneWidget);
+  });
+
+  testWidgets('RC-07: Book hit-test without per-word WidgetSpan', (tester) async {
+    await pumpBookReader(tester);
+
+    expect(find.byKey(const Key('readerCueToken_0_0')), findsNothing);
+    final textWidget = tester.widget<Text>(
+      find.byKey(const Key('readerCueText_0')),
+    );
+    expect(textWidget.textSpan, isNotNull);
+    expect(_paragraphTextHasWidgetSpan(textWidget.textSpan!), isFalse);
+
+    await _tapBookToken(
+      tester,
+      cueIndex: 0,
+      tokenIndex: 0,
+      paragraph: 'Once upon a time there was a fox.',
+    );
+    expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
+  });
+
+  testWidgets('RC-08: Progressive tokenize keeps early tap', (tester) async {
+    final restGate = Completer<void>();
+    var tokenizeCalls = 0;
+    final manyParas = [
+      for (var i = 0; i < 8; i++) 'Word$i alpha beta gamma.',
+    ];
+    pumpChapters = [
+      EpubChapterDto(index: 0, title: 'Long', paragraphs: manyParas),
+    ];
+    pumpTokenize = (texts) async {
+      tokenizeCalls++;
+      if (tokenizeCalls == 1) {
+        // Prefix batch (≤4) returns immediately.
+        expect(texts.length, lessThanOrEqualTo(4));
+        return _tokenizeFromTexts(texts);
+      }
+      // Remainder waits until test releases the gate.
+      await restGate.future;
+      return _tokenizeFromTexts(texts);
+    };
+
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
+        home: ReaderScreen(
+          title: pumpTitle,
+          originalCues: const [],
+          originalDocumentId: pumpOriginalDocumentId,
+          documentRepository: documents,
+          dictionaryRepository: dictionary,
+          documentFormat: documentFormatEpub,
+          originalChapters: pumpChapters,
+          tokenizeCues: pumpTokenize,
+          markVocabTokens: pumpMark,
+        ),
+      ),
+    );
+    // Allow prefix tokenize + idle schedule to request rest (still gated).
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump();
+
+    expect(tokenizeCalls, greaterThanOrEqualTo(1));
+    expect(find.byKey(const Key('readerAddVocabCta')), findsNothing);
+
+    // Early paragraph is tap-ready before full-chapter tokenize completes.
+    await _tapBookToken(
+      tester,
+      cueIndex: 0,
+      tokenIndex: 0,
+      paragraph: manyParas[0],
+    );
+    expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
+
+    restGate.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('RC-09: Chapter token cache on pager return', (tester) async {
+    final tokenizeBatches = <List<String>>[];
+    pumpTokenize = (texts) async {
+      tokenizeBatches.add(List<String>.from(texts));
+      return _tokenizeFromTexts(texts);
+    };
+    await pumpBookReader(tester);
+
+    final batchesAfterOpen = tokenizeBatches.length;
+    expect(batchesAfterOpen, greaterThanOrEqualTo(1));
+
+    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+    await tester.pumpAndSettle();
+    final batchesAfterNext = tokenizeBatches.length;
+    expect(batchesAfterNext, greaterThan(batchesAfterOpen));
+
+    await tester.tap(find.byKey(const Key('readerBookChapterPrev')));
+    await tester.pumpAndSettle();
+
+    // Return to chapter 0: cache hit — no additional tokenize batches (RC-09).
+    expect(tokenizeBatches.length, batchesAfterNext);
+
+    await _tapBookToken(
+      tester,
+      cueIndex: 0,
+      tokenIndex: 0,
+      paragraph: 'Once upon a time there was a fox.',
+    );
+    expect(find.byKey(const Key('readerAddVocabCta')), findsOneWidget);
   });
 
   testWidgets('RC-05: No video chrome for EPUB document', (tester) async {
@@ -284,7 +447,7 @@ void main() {
     expect(find.text('3 / 3'), findsOneWidget);
     expect(find.text('Chapter Three'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_2')), findsOneWidget);
-    expect(find.text('friends'), findsOneWidget);
+    expect(find.textContaining('friends'), findsOneWidget);
     expect(find.text('Chapter One'), findsNothing);
   });
 

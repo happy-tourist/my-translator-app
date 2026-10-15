@@ -12,3 +12,11 @@ String cueCharSlice(String text, int start, int end) {
   final safeEnd = end > len ? len : end;
   return String.fromCharCodes(runes.skip(start).take(safeEnd - start));
 }
+
+/// Maps a UTF-16 code-unit offset (TextPainter / [TextPosition.offset]) to a
+/// Unicode scalar index used by tokenize DTO spans.
+int cueUtf16OffsetToCharIndex(String text, int utf16Offset) {
+  if (utf16Offset <= 0) return 0;
+  if (utf16Offset >= text.length) return cueCharLength(text);
+  return text.substring(0, utf16Offset).runes.length;
+}

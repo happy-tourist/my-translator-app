@@ -9,8 +9,9 @@ import 'package:my_translator_app/src/rust/api/tokenize.dart';
 /// Shared cue row (timestamp + text_lines) for original and translation panes.
 ///
 /// When [tokens] is non-null and non-empty on the original pane, word spans
-/// become tappable hit targets (`readerCueToken_*`). Translation pane must
-/// omit tokens (RT-08 / RH-12).
+/// become tappable. Subtitle mode uses per-token WidgetSpan Keys
+/// (`readerCueToken_*`). Book mode ([lightweightHitTest]) uses TextSpan + one
+/// paragraph gesture (D11 / RC-07) — no per-word WidgetSpan.
 class CueRow extends StatelessWidget {
   const CueRow({
     super.key,
@@ -23,6 +24,7 @@ class CueRow extends StatelessWidget {
     this.flashTokenIndex,
     this.onTokenTap,
     this.showTimestamp = true,
+    this.lightweightHitTest = false,
     this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
     this.keySuffix,
   });
@@ -51,6 +53,10 @@ class CueRow extends StatelessWidget {
   /// pass `true` so file `startMs → endMs` shows (VF-04 / D5); empty slots
   /// omit CueRow entirely (VF-03).
   final bool showTimestamp;
+
+  /// Book-mode path (D11): Text.rich TextSpans + one gesture layer; maps tap
+  /// → char → tokenIndex. Subtitle CueRow keeps WidgetSpan-per-token.
+  final bool lightweightHitTest;
 
   /// Outer padding; use [EdgeInsets.zero] when embedded under a video frame.
   final EdgeInsetsGeometry padding;
@@ -89,18 +95,29 @@ class CueRow extends StatelessWidget {
             const SizedBox(height: 4),
           ],
           if (selectable)
-            _SelectableCueText(
-              cueText: text,
-              cueListIndex: cueListIndex ?? cue.index,
-              tokens: tokenList,
-              bodyStyle: bodyStyle,
-              textKey: Key(_keyed('${keyPrefix}Text_${cue.index}')),
-              selectionStart: selectionStart,
-              selectionEnd: selectionEnd,
-              flashTokenIndex: flashTokenIndex,
-              onTokenTap: onTokenTap!,
-              keySuffix: keySuffix,
-            )
+            lightweightHitTest
+                ? _LightweightSelectableCueText(
+                    cueText: text,
+                    tokens: tokenList,
+                    bodyStyle: bodyStyle,
+                    textKey: Key(_keyed('${keyPrefix}Text_${cue.index}')),
+                    selectionStart: selectionStart,
+                    selectionEnd: selectionEnd,
+                    flashTokenIndex: flashTokenIndex,
+                    onTokenTap: onTokenTap!,
+                  )
+                : _SelectableCueText(
+                    cueText: text,
+                    cueListIndex: cueListIndex ?? cue.index,
+                    tokens: tokenList,
+                    bodyStyle: bodyStyle,
+                    textKey: Key(_keyed('${keyPrefix}Text_${cue.index}')),
+                    selectionStart: selectionStart,
+                    selectionEnd: selectionEnd,
+                    flashTokenIndex: flashTokenIndex,
+                    onTokenTap: onTokenTap!,
+                    keySuffix: keySuffix,
+                  )
           else
             Text(
               text,
@@ -113,6 +130,145 @@ class CueRow extends StatelessWidget {
   }
 }
 
+/// Book-mode selectable paragraph: TextSpans + one gesture (D11 / RC-07).
+class _LightweightSelectableCueText extends StatelessWidget {
+  const _LightweightSelectableCueText({
+    required this.cueText,
+    required this.tokens,
+    required this.bodyStyle,
+    required this.textKey,
+    required this.selectionStart,
+    required this.selectionEnd,
+    required this.flashTokenIndex,
+    required this.onTokenTap,
+  });
+
+  final String cueText;
+  final List<TokenDto> tokens;
+  final TextStyle? bodyStyle;
+  final Key textKey;
+  final int? selectionStart;
+  final int? selectionEnd;
+  final int? flashTokenIndex;
+  final ValueChanged<int> onTokenTap;
+
+  TextSpan _buildSpanTree(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final readerColors = Theme.of(context).extension<ReaderColors>() ??
+        (Theme.of(context).brightness == Brightness.dark
+            ? ReaderColors.dark
+            : ReaderColors.light);
+    final selectedStyle = (bodyStyle ?? const TextStyle()).copyWith(
+      backgroundColor: scheme.primaryContainer,
+      color: scheme.onPrimaryContainer,
+    );
+    final flashStyle = (bodyStyle ?? const TextStyle()).copyWith(
+      backgroundColor: scheme.tertiaryContainer,
+      color: scheme.onTertiaryContainer,
+      fontWeight: FontWeight.w700,
+    );
+    final highlightStyle = (bodyStyle ?? const TextStyle()).copyWith(
+      backgroundColor: readerColors.lemmaHighlight,
+      color: readerColors.lemmaHighlightOn,
+    );
+
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    final textCharLen = cueCharLength(cueText);
+    for (final token in tokens) {
+      final start = token.charStart;
+      final end = token.charEnd;
+      if (start < cursor || end > textCharLen || start >= end) {
+        continue;
+      }
+      if (start > cursor) {
+        spans.add(
+          TextSpan(
+            text: cueCharSlice(cueText, cursor, start),
+            style: bodyStyle,
+          ),
+        );
+      }
+      final idx = token.tokenIndex;
+      final inSelection = selectionStart != null &&
+          selectionEnd != null &&
+          idx >= selectionStart! &&
+          idx <= selectionEnd!;
+      final flashing = flashTokenIndex == idx;
+      final style = flashing
+          ? flashStyle
+          : (inSelection
+              ? selectedStyle
+              : (token.isInVocab ? highlightStyle : bodyStyle));
+      spans.add(
+        TextSpan(
+          text: cueCharSlice(cueText, start, end),
+          style: style,
+        ),
+      );
+      cursor = end;
+    }
+    if (cursor < textCharLen) {
+      spans.add(
+        TextSpan(
+          text: cueCharSlice(cueText, cursor, textCharLen),
+          style: bodyStyle,
+        ),
+      );
+    }
+    return TextSpan(children: spans, style: bodyStyle);
+  }
+
+  int? _tokenIndexAtChar(int charIndex) {
+    for (final token in tokens) {
+      if (charIndex >= token.charStart && charIndex < token.charEnd) {
+        return token.tokenIndex;
+      }
+    }
+    return null;
+  }
+
+  void _onTapUp(TapUpDetails details, double maxWidth, BuildContext context) {
+    final spanTree = _buildSpanTree(context);
+    final painter = TextPainter(
+      text: spanTree,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxWidth);
+    final pos = painter.getPositionForOffset(details.localPosition);
+    var charIndex = cueUtf16OffsetToCharIndex(cueText, pos.offset);
+    // Upstream affinity / trailing edge: prefer the character under the finger.
+    if (pos.affinity == TextAffinity.upstream && charIndex > 0) {
+      charIndex -= 1;
+    }
+    var tokenIndex = _tokenIndexAtChar(charIndex);
+    // Whitespace between tokens: try previous scalar.
+    tokenIndex ??=
+        charIndex > 0 ? _tokenIndexAtChar(charIndex - 1) : null;
+    if (tokenIndex != null) {
+      onTokenTap(tokenIndex);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final spanTree = _buildSpanTree(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapUp: (details) =>
+              _onTapUp(details, constraints.maxWidth, context),
+          child: Text.rich(
+            spanTree,
+            key: textKey,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Subtitle-mode selectable cue: WidgetSpan + GestureDetector per token.
 class _SelectableCueText extends StatelessWidget {
   const _SelectableCueText({
     required this.cueText,

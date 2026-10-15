@@ -270,8 +270,8 @@ void main() {
     expect(find.text('2 / 3'), findsNWidgets(2));
     expect(find.text('Chapter 2'), findsOneWidget);
     expect(find.text('TrChapter 2'), findsOneWidget);
-    // Original pane is tokenized → surface words; translation stays plain text.
-    expect(find.text('Orig'), findsWidgets);
+    // Original pane is tokenized (TextSpans); translation stays plain text.
+    expect(find.textContaining('Orig'), findsWidgets);
     expect(find.text('TrPara 2 body'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_1')), findsOneWidget);
     expect(
@@ -411,7 +411,54 @@ void main() {
     expect(find.text('3 / 3'), findsOneWidget);
     expect(find.text('Chapter 3'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_2')), findsOneWidget);
-    expect(find.text('Orig'), findsWidgets);
+    expect(find.textContaining('Orig'), findsWidgets);
     expect(find.text('Chapter 1'), findsNothing);
+  });
+
+  testWidgets('RS-17: Split divider drag does not rebuild paragraph lists', (
+    tester,
+  ) async {
+    pumpOriginalChapters = _chapters(count: 2, paraPrefix: 'Orig');
+    pumpTranslationChapters = _chapters(
+      count: 2,
+      titlePrefix: 'TrChapter',
+      paraPrefix: 'TrPara',
+    );
+    pumpTranslationDocumentId = 99;
+
+    await pumpBookReader(tester);
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerBookParagraphList_0')), findsOneWidget);
+    expect(
+      find.byKey(const Key('readerTranslationBookParagraphList_0')),
+      findsOneWidget,
+    );
+
+    final origListElementBefore =
+        tester.element(find.byKey(const Key('readerBookParagraphList_0')));
+    final transListElementBefore = tester.element(
+      find.byKey(const Key('readerTranslationBookParagraphList_0')),
+    );
+
+    final divider = find.byKey(const Key('readerSplitDivider'));
+    expect(divider, findsOneWidget);
+    await tester.drag(divider, const Offset(0, 40));
+    await tester.pump();
+
+    // D13: ValueNotifier height change — ListView elements must survive drag.
+    expect(
+      tester.element(find.byKey(const Key('readerBookParagraphList_0'))),
+      same(origListElementBefore),
+    );
+    expect(
+      tester.element(
+        find.byKey(const Key('readerTranslationBookParagraphList_0')),
+      ),
+      same(transListElementBefore),
+    );
+    expect(find.text('TrPara 1 body'), findsOneWidget);
+    expect(find.textContaining('Orig'), findsWidgets);
   });
 }
