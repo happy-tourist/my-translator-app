@@ -6,6 +6,7 @@
 // Static analysis wrongly picks the IO variant, thus ignore this
 // ignore_for_file: argument_type_not_assignable
 
+import 'api/epub.dart';
 import 'api/parse.dart';
 import 'api/simple.dart';
 import 'api/tokenize.dart';
@@ -39,6 +40,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CueTokensDto dco_decode_cue_tokens_dto(dynamic raw);
 
   @protected
+  EpubChapterDto dco_decode_epub_chapter_dto(dynamic raw);
+
+  @protected
+  EpubParseErrorKind dco_decode_epub_parse_error_kind(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -49,6 +56,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<CueTokensDto> dco_decode_list_cue_tokens_dto(dynamic raw);
+
+  @protected
+  List<EpubChapterDto> dco_decode_list_epub_chapter_dto(dynamic raw);
 
   @protected
   List<OfflineModelAsset> dco_decode_list_offline_model_asset(dynamic raw);
@@ -70,6 +80,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ParseErrorKind dco_decode_parse_error_kind(dynamic raw);
+
+  @protected
+  ParsedEpub dco_decode_parsed_epub(dynamic raw);
 
   @protected
   ParsedSubtitles dco_decode_parsed_subtitles(dynamic raw);
@@ -108,6 +121,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CueTokensDto sse_decode_cue_tokens_dto(SseDeserializer deserializer);
 
   @protected
+  EpubChapterDto sse_decode_epub_chapter_dto(SseDeserializer deserializer);
+
+  @protected
+  EpubParseErrorKind sse_decode_epub_parse_error_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -118,6 +139,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<CueTokensDto> sse_decode_list_cue_tokens_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<EpubChapterDto> sse_decode_list_epub_chapter_dto(
     SseDeserializer deserializer,
   );
 
@@ -145,6 +171,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ParseErrorKind sse_decode_parse_error_kind(SseDeserializer deserializer);
+
+  @protected
+  ParsedEpub sse_decode_parsed_epub(SseDeserializer deserializer);
 
   @protected
   ParsedSubtitles sse_decode_parsed_subtitles(SseDeserializer deserializer);
@@ -185,6 +214,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_cue_tokens_dto(CueTokensDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_epub_chapter_dto(
+    EpubChapterDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_epub_parse_error_kind(
+    EpubParseErrorKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -196,6 +237,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_cue_tokens_dto(
     List<CueTokensDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_epub_chapter_dto(
+    List<EpubChapterDto> self,
     SseSerializer serializer,
   );
 
@@ -231,6 +278,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ParseErrorKind self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_parsed_epub(ParsedEpub self, SseSerializer serializer);
 
   @protected
   void sse_encode_parsed_subtitles(

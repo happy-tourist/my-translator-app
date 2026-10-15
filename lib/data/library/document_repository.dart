@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:drift/drift.dart';
 
 import 'package:my_translator_app/data/database/app_database.dart';
@@ -7,14 +5,18 @@ import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 
-/// Saved original-pane reading position (`library/documents` LD-17).
+/// Saved original-pane reading position (`library/documents` LD-17 / LD-28).
+///
+/// Format-gated semantics for [startMs]:
+/// - subtitle documents: cue `startMs` (milliseconds);
+/// - EPUB (`documentFormatEpub`): **0-based chapter index** (design D6).
 class ReadingAnchor {
   const ReadingAnchor({required this.startMs, this.alignment});
 
-  /// Cue start time in milliseconds (fits i64; compare to [CueDto.startMs] as BigInt).
+  /// Subtitle cue start ms, or EPUB 0-based chapter index (see class docs).
   final int startMs;
 
-  /// Optional `itemLeadingEdge` in `0.0…1.0`.
+  /// Optional `itemLeadingEdge` in `0.0…1.0` (cue list or paragraph list).
   final double? alignment;
 }
 
@@ -64,7 +66,8 @@ class DocumentRepository {
   final AppDatabase _db;
   final DocumentContentStore contentStore;
 
-  /// Imports a subtitle file into an existing folder. Rejects root / bad types.
+  /// Imports a subtitle or EPUB file into an existing folder.
+  /// Rejects root / bad types (LD-02 / LD-03 / LD-24).
   Future<Document> importIntoFolder({
     required int? folderId,
     required String fileName,
@@ -84,12 +87,14 @@ class DocumentRepository {
 
     final format = formatFromFileName(fileName);
     if (format == null) {
-      throw LibraryValidationException(
-        'Unsupported file type. Use .srt, .vtt, .ass, or .ssa',
-      );
+      throw LibraryValidationException(unsupportedLibraryFileTypeMessage);
     }
 
-    final stored = await contentStore.store(fileName: fileName, bytes: bytes);
+    final stored = await contentStore.store(
+      fileName: fileName,
+      bytes: bytes,
+      format: format,
+    );
     final title = titleFromFileName(fileName);
     try {
       final id = await _db
@@ -131,14 +136,14 @@ class DocumentRepository {
     )..where((d) => d.id.equals(id))).getSingleOrNull();
   }
 
-  /// Loads raw subtitle bytes for Reader open (design D5).
+  /// Loads raw document bytes for Reader open (design D5 / D6).
   ///
-  /// Web / content mode: `utf8.encode(doc.content!)`.
+  /// Web / content mode: format-gated decode (UTF-8 subtitles; base64 EPUB).
   /// Native: sandbox file via [DocumentContentStore.load] using [Document.storageKey].
   Future<Uint8List> loadBytes(Document doc) async {
     final content = doc.content;
     if (content != null) {
-      return Uint8List.fromList(utf8.encode(content));
+      return decodeWebDocumentContent(content, format: doc.format);
     }
     final key = doc.storageKey;
     if (key == null || key.isEmpty) {
@@ -165,12 +170,18 @@ class DocumentRepository {
 
     final format = formatFromFileName(fileName);
     if (format == null) {
-      throw LibraryValidationException(
-        'Unsupported file type. Use .srt, .vtt, .ass, or .ssa',
-      );
+      throw LibraryValidationException(unsupportedLibraryFileTypeMessage);
+    }
+    // LD-26 / D5: EPUB↔EPUB or subtitle↔subtitle only (no mixed link).
+    if (isEpubFormat(original.format) != isEpubFormat(format)) {
+      throw LibraryValidationException(incompatibleTranslationFormatMessage);
     }
 
-    final stored = await contentStore.store(fileName: fileName, bytes: bytes);
+    final stored = await contentStore.store(
+      fileName: fileName,
+      bytes: bytes,
+      format: format,
+    );
     final title = titleFromFileName(fileName);
     try {
       return await _db.transaction(() async {
@@ -241,9 +252,11 @@ class DocumentRepository {
     return getById(translationId);
   }
 
-  /// Persists the original document's reading anchor (LD-17 / D9).
+  /// Persists the original document's reading anchor (LD-17 / LD-28 / D6).
   ///
-  /// No-op if [documentId] is missing (best-effort; D10 — must not block UI).
+  /// [startMs] is cue start ms for subtitles, or 0-based chapter index for EPUB
+  /// (same Drift column; format-gated at call sites). Best-effort — must not
+  /// block UI when the row is missing.
   Future<void> saveReadingAnchor({
     required int documentId,
     required int startMs,
@@ -260,7 +273,10 @@ class DocumentRepository {
         );
   }
 
-  /// Loads the saved reading anchor for [documentId], or null (LD-17).
+  /// Loads the saved reading anchor for [documentId], or null (LD-17 / LD-28).
+  ///
+  /// Callers interpret [ReadingAnchor.startMs] by document format (chapter
+  /// index when EPUB).
   Future<ReadingAnchor?> loadReadingAnchor(int documentId) async {
     final doc = await getById(documentId);
     if (doc == null) return null;

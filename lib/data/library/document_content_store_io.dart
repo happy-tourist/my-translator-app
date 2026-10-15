@@ -13,6 +13,9 @@ class _IoDocumentContentStore implements DocumentContentStore {
   Future<StoredDocumentBytes> store({
     required String fileName,
     required Uint8List bytes,
+    // Keep signature aligned with [DocumentContentStore]; Web uses [format]
+    // for base64 EPUB — native sandbox stores raw bytes regardless.
+    String? format,
   }) async {
     final docs = await getApplicationDocumentsDirectory();
     final dir = Directory(p.join(docs.path, 'library_docs'));

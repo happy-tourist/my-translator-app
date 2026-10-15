@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:my_translator_app/data/library/document_content_store.dart';
+import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
@@ -11,6 +12,13 @@ import '../support/test_database.dart';
 
 Uint8List _srtBytes([String text = 'Hi']) =>
     Uint8List.fromList(utf8.encode('1\n00:00:01,000 --> 00:00:02,000\n$text\n'));
+
+/// Synthetic ZIP/EPUB-like bytes that UTF-8 roundtrip would corrupt (LD-27).
+Uint8List _epubLikeBytes() => Uint8List.fromList([
+      0x50, 0x4B, 0x03, 0x04, // ZIP local file header
+      0x00, 0xFF, 0xFE, 0x80, 0x81, 0x00, 0x7F, 0xC0,
+      for (var i = 0; i < 32; i++) i * 7 & 0xFF,
+    ]);
 
 void main() {
   late final db = createTestDatabase();
@@ -554,5 +562,150 @@ void main() {
     await documents.detachVideo(original.id);
     expect(await documents.getVideoMedia(original.id), isNull);
     expect(await documents.getVideoAttachment(original.id), isNull);
+  });
+
+  test('LD-03 / LD-24: accept .epub; reject still lists epub in message', () async {
+    expect(formatFromFileName('book.epub'), documentFormatEpub);
+    expect(formatFromFileName('notes.txt'), isNull);
+
+    final folder = await folders.createFolder(name: 'Books');
+    final doc = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'novel.epub',
+      bytes: _epubLikeBytes(),
+    );
+    expect(doc.format, documentFormatEpub);
+    expect(doc.title, 'novel');
+    final listed = await documents.listInFolder(folder.id);
+    expect(listed.map((d) => d.format), contains(documentFormatEpub));
+
+    try {
+      await documents.importIntoFolder(
+        folderId: folder.id,
+        fileName: 'notes.txt',
+        bytes: Uint8List.fromList(utf8.encode('nope')),
+      );
+      fail('expected LibraryValidationException');
+    } on LibraryValidationException catch (e) {
+      expect(e.message, contains('.epub'));
+      expect(e.message, contains('Unsupported'));
+    }
+  });
+
+  test('LD-27: Web EPUB bytes roundtrip binary-safe (base64 content)', () async {
+    final webStore = MemoryDocumentContentStore(storeAsContent: true);
+    final webDocs = DocumentRepository(db, contentStore: webStore);
+    final folder = await folders.createFolder(name: 'WebBooks');
+    final bytes = _epubLikeBytes();
+
+    final doc = await webDocs.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'bin.epub',
+      bytes: bytes,
+    );
+    expect(doc.content, isNotNull);
+    expect(doc.storageKey, isNull);
+    // Must be base64, not a UTF-8-lossy decode of ZIP bytes.
+    expect(doc.content, base64Encode(bytes));
+
+    final loaded = await webDocs.loadBytes(doc);
+    expect(loaded, bytes);
+
+    // Regression: subtitle Web path still UTF-8 text, not base64.
+    final srt = await webDocs.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'sub.srt',
+      bytes: _srtBytes('web-utf8'),
+    );
+    expect(srt.content, contains('web-utf8'));
+    expect(utf8.decode(await webDocs.loadBytes(srt)), contains('web-utf8'));
+  });
+
+  test('LD-27b: native sandbox EPUB roundtrip without UTF-8', () async {
+    final keyStore = MemoryDocumentContentStore(storeAsContent: false);
+    final keyDocs = DocumentRepository(db, contentStore: keyStore);
+    final folder = await folders.createFolder(name: 'NativeBooks');
+    final bytes = _epubLikeBytes();
+    final doc = await keyDocs.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'native.epub',
+      bytes: bytes,
+    );
+    expect(doc.storageKey, isNotNull);
+    expect(doc.content, isNull);
+    expect(await keyDocs.loadBytes(doc), bytes);
+  });
+
+  test('LD-26: Reject non-EPUB translation for EPUB original', () async {
+    final folder = await folders.createFolder(name: 'Books');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'novel.epub',
+      bytes: _epubLikeBytes(),
+    );
+
+    expect(
+      () => documents.attachTranslation(
+        originalDocumentId: original.id,
+        fileName: 'ru.srt',
+        bytes: _srtBytes('перевод'),
+      ),
+      throwsA(
+        isA<LibraryValidationException>().having(
+          (e) => e.message,
+          'message',
+          contains('EPUB'),
+        ),
+      ),
+    );
+
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.epub',
+      bytes: _epubLikeBytes(),
+    );
+    expect(translation.format, documentFormatEpub);
+    final reloaded = await documents.getById(original.id);
+    expect(reloaded!.translationDocumentId, translation.id);
+  });
+
+  test('LD-26b: Reject EPUB translation for subtitle original', () async {
+    final folder = await folders.createFolder(name: 'S01');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    expect(
+      () => documents.attachTranslation(
+        originalDocumentId: original.id,
+        fileName: 'ru.epub',
+        bytes: _epubLikeBytes(),
+      ),
+      throwsA(isA<LibraryValidationException>()),
+    );
+  });
+
+  test('LD-28: EPUB reading anchor stores chapter index', () async {
+    final folder = await folders.createFolder(name: 'Books');
+    final original = await documents.importIntoFolder(
+      folderId: folder.id,
+      fileName: 'novel.epub',
+      bytes: _epubLikeBytes(),
+    );
+
+    await documents.saveReadingAnchor(
+      documentId: original.id,
+      startMs: 3, // chapter index
+      alignment: 0.5,
+    );
+    final loaded = await documents.loadReadingAnchor(original.id);
+    expect(loaded, isNotNull);
+    expect(loaded!.startMs, 3);
+    expect(loaded.alignment, closeTo(0.5, 1e-9));
+
+    final row = await documents.getById(original.id);
+    expect(row!.format, documentFormatEpub);
+    expect(row.lastReadStartMs, 3);
   });
 }

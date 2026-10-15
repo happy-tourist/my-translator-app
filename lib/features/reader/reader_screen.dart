@@ -14,6 +14,7 @@ import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
 import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
+import 'package:my_translator_app/data/library/parse_epub_fn.dart';
 import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
 import 'package:my_translator_app/data/translate/offline_translate.dart';
@@ -33,6 +34,7 @@ import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/features/reader/video_frame_cache.dart';
 import 'package:my_translator_app/features/reader/video_frame_pages.dart';
 import 'package:my_translator_app/features/reader/video_second_math.dart';
+import 'package:my_translator_app/src/rust/api/epub.dart' as rust_epub;
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
 import 'package:my_translator_app/src/rust/api/tokenize.dart' as rust_tokenize;
 
@@ -46,20 +48,24 @@ class PickedTranslationFile {
 
 typedef ReaderTranslationPicker = Future<PickedTranslationFile?> Function();
 
-/// Cues-first Reader with optional split mode (RS-01…RS-12) and tap selection.
+/// Cues-first Reader with optional split / EPUB book mode and tap selection.
 class ReaderScreen extends StatefulWidget {
   const ReaderScreen({
     super.key,
     required this.title,
-    required this.originalCues,
+    this.originalCues = const [],
     required this.originalDocumentId,
     required this.documentRepository,
     required this.dictionaryRepository,
+    this.documentFormat,
+    this.originalChapters,
+    this.translationChapters,
     this.translationCues,
     this.translationDocumentId,
     this.initialReadingAnchor,
     this.initialVideoAttachment,
     this.parseSubtitles,
+    this.parseEpub,
     this.tokenizeCues,
     this.markVocabTokens,
     this.filePicker,
@@ -71,21 +77,39 @@ class ReaderScreen extends StatefulWidget {
   });
 
   final String title;
+
+  /// Subtitle cues for the original pane. Empty in EPUB book mode (D4).
   final List<rust_parse.CueDto> originalCues;
   final int originalDocumentId;
   final DocumentRepository documentRepository;
   final DictionaryRepository dictionaryRepository;
+
+  /// Stored format (`srt` / `vtt` / `ass` / `epub`). Book mode when `epub`.
+  final String? documentFormat;
+
+  /// EPUB chapters for book-mode original pane (D4 / LD-25).
+  final List<rust_epub.EpubChapterDto>? originalChapters;
+
+  /// Optional linked EPUB translation chapters (LD-16).
+  final List<rust_epub.EpubChapterDto>? translationChapters;
+
   final List<rust_parse.CueDto>? translationCues;
   final int? translationDocumentId;
 
-  /// Saved original-pane position from Library open (RS-12 / LD-17).
+  /// Saved original-pane position from Library open (RS-12 / LD-17 / LD-28).
+  ///
+  /// For EPUB, [ReadingAnchor.startMs] is the 0-based chapter index.
   final ReadingAnchor? initialReadingAnchor;
 
   /// Best-effort video meta from Library open (LD-19); null → Reader loads.
+  /// Unused / ignored for EPUB book mode (RC-05).
   final VideoAttachment? initialVideoAttachment;
 
   /// Defaults to generated FRB [rust_parse.parseSubtitles].
   final ParseSubtitlesFn? parseSubtitles;
+
+  /// Defaults to generated FRB [rust_epub.parseEpub].
+  final ParseEpubFn? parseEpub;
 
   /// Defaults to generated FRB [rust_tokenize.tokenizeCues].
   final TokenizeCuesFn? tokenizeCues;
@@ -136,6 +160,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
+  List<rust_epub.EpubChapterDto>? _translationChapters;
+
+  /// Current EPUB chapter index (0-based). Book mode only.
+  var _chapterIndex = 0;
 
   /// Active video pages session (VF-01…VF-13). Null ref → cue list shown.
   String? _videoRef;
@@ -149,6 +177,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// Batch tokenize+mark cache (D5). Null while in-flight or after failure.
   List<rust_tokenize.CueTokensDto>? _cueTokensByIndex;
   var _tokenizeReady = false;
+
+  /// Invalidates in-flight tokenize/mark when chapter changes (book mode) or a
+  /// newer batch starts — prevents stale FRB results from binding wrong text.
+  var _tokenizeGeneration = 0;
 
   /// Contiguous Add selection: active cue + inclusive token range (D5).
   int? _activeCueIndex;
@@ -165,6 +197,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   ParseSubtitlesFn get _parse =>
       widget.parseSubtitles ?? rust_parse.parseSubtitles;
 
+  ParseEpubFn get _parseEpub => widget.parseEpub ?? rust_epub.parseEpub;
+
   TokenizeCuesFn get _tokenize =>
       widget.tokenizeCues ??
       ((texts) => rust_tokenize.tokenizeCues(texts: texts));
@@ -180,8 +214,24 @@ class _ReaderScreenState extends State<ReaderScreen> {
   late final VideoFrameExtractor _videoExtractor =
       widget.videoFrameExtractor ?? createPlatformVideoFrameExtractor();
 
+  bool get _isBookMode => isEpubFormat(widget.documentFormat);
+
+  List<rust_epub.EpubChapterDto> get _originalChapters =>
+      widget.originalChapters ?? const [];
+
+  /// Paragraphs of the current EPUB chapter (book mode).
+  List<String> get _currentChapterParagraphs {
+    final chapters = _originalChapters;
+    if (chapters.isEmpty) return const [];
+    final index = _chapterIndex.clamp(0, chapters.length - 1);
+    return chapters[index].paragraphs;
+  }
+
   bool get _hasTranslationCues =>
       _translationCues != null && _translationCues!.isNotEmpty;
+
+  bool get _hasTranslationChapters =>
+      _translationChapters != null && _translationChapters!.isNotEmpty;
 
   /// Linked translation exists in Drift (may lack cues after failed restore).
   bool get _hasLinkedTranslation => _translationDocumentId != null;
@@ -192,28 +242,51 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _selectionEnd != null;
 
   bool get _hasVideo =>
-      _videoRef != null && _videoTotalSeconds >= 1;
+      !_isBookMode && _videoRef != null && _videoTotalSeconds >= 1;
 
   @override
   void initState() {
     super.initState();
     _translationCues = widget.translationCues;
     _translationDocumentId = widget.translationDocumentId;
+    _translationChapters = widget.translationChapters;
+    if (_isBookMode) {
+      final chapters = _originalChapters;
+      final anchor = widget.initialReadingAnchor;
+      if (chapters.isNotEmpty) {
+        final raw = anchor?.startMs ?? 0;
+        _chapterIndex = raw.clamp(0, chapters.length - 1);
+      }
+      // D4 / RC-04: tokenize current chapter paragraphs (not empty originalCues).
+      unawaited(_runBatchTokenize());
+      // RS-16 / D5: linked translation with unequal N — notice on open (not silent).
+      final linkedChapters = widget.translationChapters;
+      if (linkedChapters != null &&
+          chapters.isNotEmpty &&
+          linkedChapters.length != chapters.length) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _showError(mismatchedEpubChapterCountMessage);
+        });
+      }
+    }
     _videoCache = widget.videoFrameCache ??
         DocumentRepositoryVideoFrameCache(
           widget.documentRepository,
           widget.originalDocumentId,
         );
-    final initialVideo = widget.initialVideoAttachment;
-    if (initialVideo != null) {
-      unawaited(_hydrateVideoAttachment(initialVideo));
-    } else {
-      unawaited(_loadVideoAttachmentBestEffort());
+    if (!_isBookMode) {
+      final initialVideo = widget.initialVideoAttachment;
+      if (initialVideo != null) {
+        unawaited(_hydrateVideoAttachment(initialVideo));
+      } else {
+        unawaited(_loadVideoAttachmentBestEffort());
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _restoreInitialReadingAnchor();
+      });
+      unawaited(_runBatchTokenize());
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _restoreInitialReadingAnchor();
-    });
-    unawaited(_runBatchTokenize());
   }
 
   @override
@@ -246,12 +319,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _runBatchTokenize() async {
-    final texts = widget.originalCues
-        .map((c) => c.textLines.join('\n'))
-        .toList(growable: false);
+    // Book mode: paragraph strings of the current chapter (D4 / RC-04).
+    // Subtitle mode: cue display strings.
+    final generation = ++_tokenizeGeneration;
+    final texts = _isBookMode
+        ? List<String>.from(_currentChapterParagraphs)
+        : widget.originalCues
+            .map((c) => c.textLines.join('\n'))
+            .toList(growable: false);
+    if (texts.isEmpty) {
+      if (!mounted || generation != _tokenizeGeneration) return;
+      setState(() {
+        _cueTokensByIndex = const [];
+        _tokenizeReady = true;
+      });
+      return;
+    }
     try {
       final result = await _tokenize(texts);
-      if (!mounted) return;
+      if (!mounted || generation != _tokenizeGeneration) return;
       final cached = _normalizeCueTokensCache(result, texts.length);
       // Mark failure must not wipe a successful tokenize (tap still works;
       // highlights refresh on next save/open).
@@ -259,9 +345,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
         final lemmas = (await widget.dictionaryRepository.list())
             .map((e) => e.lemma)
             .toList(growable: false);
-        if (!mounted) return;
+        if (!mounted || generation != _tokenizeGeneration) return;
         final marked = await _mark(cues: cached, vocabLemmas: lemmas);
-        if (!mounted) return;
+        if (!mounted || generation != _tokenizeGeneration) return;
         setState(() {
           _cueTokensByIndex =
               _normalizeCueTokensCache(marked, texts.length);
@@ -272,7 +358,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           debugPrint('markVocabTokens on open failed: $e\n$st');
           return true;
         }());
-        if (!mounted) return;
+        if (!mounted || generation != _tokenizeGeneration) return;
         setState(() {
           _cueTokensByIndex = cached;
           _tokenizeReady = true;
@@ -284,19 +370,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
         debugPrint('tokenizeCues Anyhow: ${e.message}');
         return true;
       }());
-      _failTokenizeBatch();
+      _failTokenizeBatch(generation);
     } on PanicException catch (e) {
       assert(() {
         debugPrint('tokenizeCues panic: ${e.message}');
         return true;
       }());
-      _failTokenizeBatch();
+      _failTokenizeBatch(generation);
     } catch (e, st) {
       assert(() {
         debugPrint('tokenizeCues failed: $e\n$st');
         return true;
       }());
-      _failTokenizeBatch();
+      _failTokenizeBatch(generation);
     }
   }
 
@@ -304,13 +390,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Future<void> _refreshVocabMarks() async {
     final cache = _cueTokensByIndex;
     if (cache == null || !_tokenizeReady) return;
+    final generation = _tokenizeGeneration;
     try {
       final lemmas = (await widget.dictionaryRepository.list())
           .map((e) => e.lemma)
           .toList(growable: false);
-      if (!mounted) return;
+      if (!mounted || generation != _tokenizeGeneration) return;
       final marked = await _mark(cues: cache, vocabLemmas: lemmas);
-      if (!mounted) return;
+      if (!mounted || generation != _tokenizeGeneration) return;
       setState(() {
         _cueTokensByIndex =
             _normalizeCueTokensCache(marked, cache.length);
@@ -320,13 +407,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
         debugPrint('markVocabTokens refresh failed: $e\n$st');
         return true;
       }());
+      if (!mounted || generation != _tokenizeGeneration) return;
       _showMarkRefreshError();
     }
   }
 
   /// RT-13 / D4: plain text + SnackBar; no token selection.
-  void _failTokenizeBatch() {
-    if (!mounted) return;
+  void _failTokenizeBatch(int generation) {
+    if (!mounted || generation != _tokenizeGeneration) return;
     setState(() {
       _cueTokensByIndex = null;
       _tokenizeReady = false;
@@ -493,8 +581,68 @@ class _ReaderScreenState extends State<ReaderScreen> {
   String? _activeCueText() {
     if (!_hasSelection) return null;
     final cueIndex = _activeCueIndex!;
+    if (_isBookMode) {
+      final paragraphs = _currentChapterParagraphs;
+      if (cueIndex < 0 || cueIndex >= paragraphs.length) return null;
+      return paragraphs[cueIndex];
+    }
     if (cueIndex < 0 || cueIndex >= widget.originalCues.length) return null;
     return widget.originalCues[cueIndex].textLines.join('\n');
+  }
+
+  /// Display-only CueDto adapters for paragraph rows (D4). Times are unused.
+  List<rust_parse.CueDto> _paragraphDisplayCues(List<String> paragraphs) {
+    return [
+      for (var i = 0; i < paragraphs.length; i++)
+        rust_parse.CueDto(
+          index: i,
+          startMs: BigInt.zero,
+          endMs: BigInt.zero,
+          textLines: [paragraphs[i]],
+        ),
+    ];
+  }
+
+  /// Shared 0-based chapter index for both EPUB panes (D5 / RS-14).
+  ///
+  /// Each pane clamps for display when N differs (RS-16).
+  void _goToChapter(int next) {
+    if (!_isBookMode) return;
+    if (_originalChapters.isEmpty && !_hasTranslationChapters) return;
+    final maxOrig =
+        _originalChapters.isEmpty ? 0 : _originalChapters.length - 1;
+    final maxTrans = _hasTranslationChapters
+        ? _translationChapters!.length - 1
+        : maxOrig;
+    final maxShared = maxOrig > maxTrans ? maxOrig : maxTrans;
+    final clamped = next.clamp(0, maxShared);
+    if (clamped == _chapterIndex) return;
+
+    final prevOrig = _originalChapters.isEmpty
+        ? 0
+        : _chapterIndex.clamp(0, maxOrig);
+    final nextOrig =
+        _originalChapters.isEmpty ? 0 : clamped.clamp(0, maxOrig);
+    final origChapterChanged =
+        _originalChapters.isNotEmpty && nextOrig != prevOrig;
+
+    setState(() {
+      _chapterIndex = clamped;
+      if (origChapterChanged) {
+        _clearSelection(updateState: false);
+        _cueTokensByIndex = null;
+        _tokenizeReady = false;
+        // Invalidate in-flight tokenize before starting the next batch so a
+        // slower chapter-A response cannot bind onto chapter-B paragraphs.
+        _tokenizeGeneration++;
+      }
+    });
+    // ListView key includes chapter index → remount resets scroll to start (RC-02).
+    if (origChapterChanged) {
+      unawaited(_runBatchTokenize());
+    }
+    // Persist chapter index on pager settle (LD-28 / RC-06); not nearestCueIndex.
+    unawaited(_persistReadingAnchor(force: true));
   }
 
   /// D8: longest phrase span covering [tokenIndex] > shorter > single morph.
@@ -956,6 +1104,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _toggleSplit() {
+    // Book mode: chapter index is session state (no cue-list remount).
+    if (_isBookMode) {
+      setState(() => _splitEnabled = !_splitEnabled);
+      return;
+    }
+
     // RS-10 / RS-11 / D7: remounting the original list resets scroll — capture
     // top-visible anchor before Show *and* Hide; seed initialScrollIndex so
     // the first painted frame is not cue 0; jumpTo after layout as backup.
@@ -1068,6 +1222,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Future<void> _persistReadingAnchor({bool force = false}) async {
     // D10: never write while programmatic sync is in flight (unless pop/dispose).
     if (!force && _syncing) return;
+
+    if (_isBookMode) {
+      // LD-28 / D6: lastReadStartMs = 0-based chapter index for EPUB.
+      if (_originalChapters.isEmpty) return;
+      try {
+        await widget.documentRepository.saveReadingAnchor(
+          documentId: widget.originalDocumentId,
+          startMs: _chapterIndex.clamp(0, _originalChapters.length - 1),
+          alignment: null,
+        );
+      } catch (e, st) {
+        assert(() {
+          debugPrint('saveReadingAnchor (epub) failed: $e\n$st');
+          return true;
+        }());
+      }
+      return;
+    }
+
     if (widget.originalCues.isEmpty) return;
 
     final top = _topVisible(_originalPositions);
@@ -1104,6 +1277,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // One slot per original: delete first when a link exists (RS-07 / D5).
     if (_loadingTranslation ||
         _hasTranslationCues ||
+        _hasTranslationChapters ||
         _hasLinkedTranslation) {
       return;
     }
@@ -1115,6 +1289,47 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (picked == null || !mounted) return;
 
       final formatHint = formatFromFileName(picked.fileName);
+
+      if (_isBookMode) {
+        // LD-26: EPUB original accepts only .epub translation.
+        if (!isEpubFormat(formatHint)) {
+          _showError(incompatibleTranslationFormatMessage);
+          return;
+        }
+        final parsed = await _parseEpub(bytes: picked.bytes);
+        if (!mounted) return;
+        if (parsed.chapters.isEmpty) {
+          _showError(
+            messageForEpubParseError(rust_epub.EpubParseErrorKind.empty),
+          );
+          return;
+        }
+        final attached = await widget.documentRepository.attachTranslation(
+          originalDocumentId: widget.originalDocumentId,
+          fileName: picked.fileName,
+          bytes: picked.bytes,
+        );
+        if (!mounted) return;
+        // RS-16 / D5: unequal N → noticeable error; still attach + clamp display.
+        final mismatched =
+            _originalChapters.isNotEmpty &&
+            parsed.chapters.length != _originalChapters.length;
+        setState(() {
+          _translationChapters = parsed.chapters;
+          _translationDocumentId = attached.id;
+        });
+        if (mismatched) {
+          _showError(mismatchedEpubChapterCountMessage);
+        }
+        return;
+      }
+
+      // LD-26 / D5: subtitle original accepts only subtitle translations.
+      if (isEpubFormat(formatHint)) {
+        _showError(incompatibleTranslationFormatMessage);
+        return;
+      }
+
       final parsed = await _parse(
         bytes: picked.bytes,
         formatHint: formatHint,
@@ -1146,6 +1361,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           unawaited(_syncPanes(fromOriginal: true));
         }
       });
+    } on rust_epub.EpubParseErrorKind catch (kind) {
+      _showError(messageForEpubParseError(kind));
     } on rust_parse.ParseErrorKind catch (kind) {
       _showError(messageForParseError(kind));
     } on LibraryValidationException catch (e) {
@@ -1176,7 +1393,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _deleteTranslation() async {
-    if (!_hasTranslationCues && !_hasLinkedTranslation) return;
+    if (!_hasTranslationCues &&
+        !_hasTranslationChapters &&
+        !_hasLinkedTranslation) {
+      return;
+    }
     try {
       await widget.documentRepository.detachAndDeleteTranslation(
         widget.originalDocumentId,
@@ -1184,6 +1405,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (!mounted) return;
       setState(() {
         _translationCues = null;
+        _translationChapters = null;
         _translationDocumentId = null;
       });
     } on LibraryValidationException catch (e) {
@@ -1346,6 +1568,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
 
     if (_syncing || !_splitEnabled) return false;
+    // Book mode syncs by chapter index (pager), not cue startMs (RS-05/06 vs RS-14).
+    if (_isBookMode) return false;
     if (_translationCues == null || _translationCues!.isEmpty) return false;
     // VF-07 / D6: with video, bottom scroll must not move original pages.
     if (_hasVideo && !fromOriginal) return false;
@@ -1371,25 +1595,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
-          IconButton(
-            key: const Key('readerLoadVideo'),
-            tooltip: _hasVideo ? 'Replace video' : 'Load video',
-            icon: _loadingVideo
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.video_file_outlined),
-            onPressed: _loadingVideo ? null : _loadVideo,
-          ),
-          if (_hasVideo)
+          if (!_isBookMode) ...[
             IconButton(
-              key: const Key('readerRemoveVideo'),
-              tooltip: 'Remove video',
-              icon: const Icon(Icons.videocam_off_outlined),
-              onPressed: _loadingVideo ? null : _removeVideo,
+              key: const Key('readerLoadVideo'),
+              tooltip: _hasVideo ? 'Replace video' : 'Load video',
+              icon: _loadingVideo
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.video_file_outlined),
+              onPressed: _loadingVideo ? null : _loadVideo,
             ),
+            if (_hasVideo)
+              IconButton(
+                key: const Key('readerRemoveVideo'),
+                tooltip: 'Remove video',
+                icon: const Icon(Icons.videocam_off_outlined),
+                onPressed: _loadingVideo ? null : _removeVideo,
+              ),
+          ],
           IconButton(
             key: const Key('readerSplitToggle'),
             tooltip: _splitEnabled ? 'Hide split' : 'Show split',
@@ -1401,9 +1627,285 @@ class _ReaderScreenState extends State<ReaderScreen> {
         ],
       ),
       // D4 revision 2: paged frames replace original cue body (not a strip).
-      body: _splitEnabled ? _buildSplitBody() : _buildSinglePane(),
+      // Book mode: chapter paragraphs (full pager chrome in Block 3).
+      body: _isBookMode
+          ? (_splitEnabled ? _buildBookSplitBody() : _buildBookPane())
+          : (_splitEnabled ? _buildSplitBody() : _buildSinglePane()),
       // D6: CTA when selection non-empty; sheet/save is block 3.
       bottomNavigationBar: _hasSelection ? _buildAddVocabCta() : null,
+    );
+  }
+
+  /// EPUB book pane: paragraph list + bottom chapter pager (RC-01…RC-04).
+  Widget _buildBookPane() {
+    return _buildBookPaneContent(
+      chapters: _originalChapters,
+      paneKey: const Key('readerBookPane'),
+      emptyKey: const Key('readerBookEmpty'),
+      titleKeyPrefix: 'readerBookChapterTitle',
+      listKey: const Key('readerBookParagraphList'),
+      listKeyPrefix: 'readerBookParagraphList',
+      prevKey: const Key('readerBookChapterPrev'),
+      pagerKey: const Key('readerBookChapterPager'),
+      nextKey: const Key('readerBookChapterNext'),
+      cueKeyPrefix: 'readerCue',
+      fromOriginal: true,
+      interactive: true,
+    );
+  }
+
+  /// Shared chapter book column for original or translation (D5 / RS-13…RS-15).
+  Widget _buildBookPaneContent({
+    required List<rust_epub.EpubChapterDto> chapters,
+    required Key paneKey,
+    required Key emptyKey,
+    required String titleKeyPrefix,
+    required Key listKey,
+    required String listKeyPrefix,
+    required Key prevKey,
+    required Key pagerKey,
+    required Key nextKey,
+    required String cueKeyPrefix,
+    required bool fromOriginal,
+    required bool interactive,
+  }) {
+    if (chapters.isEmpty) {
+      return Center(
+        key: emptyKey,
+        child: const Text('No chapters'),
+      );
+    }
+    // Shared index; clamp per pane when N differs (RS-16).
+    final index = _chapterIndex.clamp(0, chapters.length - 1);
+    final chapter = chapters[index];
+    final paragraphs = chapter.paragraphs;
+    final displayCues = _paragraphDisplayCues(paragraphs);
+    final pageCount = chapters.length;
+    final canPrev = index > 0;
+    final canNext = index < pageCount - 1;
+
+    return Column(
+      key: paneKey,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            chapter.title,
+            key: Key('${titleKeyPrefix}_$index'),
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
+        Expanded(
+          child: KeyedSubtree(
+            key: listKey,
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (n) =>
+                  _onScrollNotification(n, fromOriginal: fromOriginal),
+              child: ListView.builder(
+                // Remount per chapter so scroll resets to start (RC-02).
+                key: Key('${listKeyPrefix}_$index'),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: displayCues.length,
+                itemBuilder: (context, i) {
+                  if (!interactive) {
+                    return CueRow(
+                      cue: displayCues[i],
+                      keyPrefix: cueKeyPrefix,
+                      cueListIndex: i,
+                      showTimestamp: false,
+                    );
+                  }
+                  final tokensReady = _tokenizeReady &&
+                      _cueTokensByIndex != null &&
+                      i < _cueTokensByIndex!.length;
+                  final tokens =
+                      tokensReady ? _cueTokensByIndex![i].tokens : null;
+                  final isActive = _hasSelection && _activeCueIndex == i;
+                  return CueRow(
+                    cue: displayCues[i],
+                    keyPrefix: cueKeyPrefix,
+                    cueListIndex: i,
+                    tokens: tokens,
+                    selectionStart: isActive ? _selectionStart : null,
+                    selectionEnd: isActive ? _selectionEnd : null,
+                    flashTokenIndex: isActive ? _flashTokenIndex : null,
+                    onTokenTap:
+                        tokensReady && tokens != null && tokens.isNotEmpty
+                            ? (tokenIndex) =>
+                                _onOriginalTokenTap(i, tokenIndex)
+                            : null,
+                    // D4 / RC-04: no timed cue chrome on paragraphs.
+                    showTimestamp: false,
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+        // Bottom chapter pager — same chrome pattern as VideoFramePages (RC-02/03).
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+            child: Row(
+              children: [
+                IconButton(
+                  key: prevKey,
+                  tooltip: 'Previous chapter',
+                  // Drive shared index from this pane's displayed chapter (RS-14).
+                  onPressed: canPrev ? () => _goToChapter(index - 1) : null,
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Expanded(
+                  child: Text(
+                    '${index + 1} / $pageCount',
+                    key: pagerKey,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+                IconButton(
+                  key: nextKey,
+                  tooltip: 'Next chapter',
+                  onPressed: canNext ? () => _goToChapter(index + 1) : null,
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBookSplitBody() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final usable = constraints.maxHeight - _dividerHandleHeight;
+        final needsDeleteChrome =
+            _hasTranslationChapters || _hasLinkedTranslation;
+        final ratioMin = usable * _minRatio;
+        final chromeFloor = usable < kMinInteractiveDimension
+            ? usable
+            : kMinInteractiveDimension.toDouble();
+        final minBottom = needsDeleteChrome && chromeFloor > ratioMin
+            ? chromeFloor
+            : ratioMin;
+        final maxTop = (usable - minBottom).clamp(0.0, usable);
+        final minTop = ratioMin > maxTop ? maxTop : ratioMin;
+        final rawTop = usable * _dividerRatio;
+        final topH = rawTop < minTop
+            ? minTop
+            : (rawTop > maxTop ? maxTop : rawTop);
+        final bottomH = usable - topH;
+
+        return Column(
+          children: [
+            SizedBox(
+              height: topH,
+              child: _buildBookPane(),
+            ),
+            GestureDetector(
+              key: const Key('readerSplitDivider'),
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragUpdate: (details) {
+                final h = constraints.maxHeight;
+                if (h <= 0) return;
+                setState(() {
+                  _dividerRatio = (_dividerRatio + details.delta.dy / h)
+                      .clamp(_minRatio, _maxRatio);
+                });
+              },
+              child: Material(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: SizedBox(
+                  height: _dividerHandleHeight,
+                  width: double.infinity,
+                  child: Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.outline,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(
+              height: bottomH,
+              child: _buildBookBottomPane(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Bottom pane for EPUB split: load CTA, book chapters, or stuck link (RS-13/07/09).
+  Widget _buildBookBottomPane() {
+    final showDeleteChrome =
+        _hasTranslationChapters || _hasLinkedTranslation;
+    final stuckLink = !_hasTranslationChapters && _hasLinkedTranslation;
+
+    final Widget content;
+    if (!_hasTranslationChapters) {
+      content = Center(
+        key: const Key('readerTranslationEmpty'),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                stuckLink
+                    ? 'Saved translation could not be shown'
+                    : 'No translation loaded',
+              ),
+              if (!stuckLink) ...[
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  key: const Key('readerTranslationLoad'),
+                  onPressed: _loadingTranslation ? null : _loadTranslation,
+                  child: _loadingTranslation
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Load translation'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    } else {
+      content = _buildBookPaneContent(
+        chapters: _translationChapters!,
+        paneKey: const Key('readerTranslationBookPane'),
+        emptyKey: const Key('readerTranslationBookEmpty'),
+        titleKeyPrefix: 'readerTranslationBookChapterTitle',
+        listKey: const Key('readerTranslationBookParagraphList'),
+        listKeyPrefix: 'readerTranslationBookParagraphList',
+        prevKey: const Key('readerTranslationBookChapterPrev'),
+        pagerKey: const Key('readerTranslationBookChapterPager'),
+        nextKey: const Key('readerTranslationBookChapterNext'),
+        cueKeyPrefix: 'readerTranslationCue',
+        fromOriginal: false,
+        interactive: false,
+      );
+    }
+
+    if (!showDeleteChrome) return content;
+
+    return Column(
+      children: [
+        _buildBottomDeleteChrome(emptyVariant: stuckLink),
+        Expanded(child: content),
+      ],
     );
   }
 

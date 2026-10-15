@@ -3,6 +3,7 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api/epub.dart';
 import 'api/parse.dart';
 import 'api/simple.dart';
 import 'api/tokenize.dart';
@@ -72,7 +73,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -1060900801;
+  int get rustContentHash => -810757139;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -102,6 +103,8 @@ abstract class RustLibApi extends BaseApi {
     required List<CueTokensDto> cues,
     required List<String> vocabLemmas,
   });
+
+  Future<ParsedEpub> crateApiEpubParseEpub({required List<int> bytes});
 
   Future<ParsedSubtitles> crateApiParseParseSubtitles({
     required List<int> bytes,
@@ -317,6 +320,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<ParsedEpub> crateApiEpubParseEpub({required List<int> bytes}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(bytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_parsed_epub,
+          decodeErrorData: sse_decode_epub_parse_error_kind,
+        ),
+        constMeta: kCrateApiEpubParseEpubConstMeta,
+        argValues: [bytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiEpubParseEpubConstMeta =>
+      const TaskConstMeta(debugName: "parse_epub", argNames: ["bytes"]);
+
+  @override
   Future<ParsedSubtitles> crateApiParseParseSubtitles({
     required List<int> bytes,
     String? formatHint,
@@ -330,7 +361,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },
@@ -361,7 +392,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -391,7 +422,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -425,7 +456,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -485,6 +516,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  EpubChapterDto dco_decode_epub_chapter_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return EpubChapterDto(
+      index: dco_decode_u_32(arr[0]),
+      title: dco_decode_String(arr[1]),
+      paragraphs: dco_decode_list_String(arr[2]),
+    );
+  }
+
+  @protected
+  EpubParseErrorKind dco_decode_epub_parse_error_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return EpubParseErrorKind.values[raw as int];
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -506,6 +556,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<CueTokensDto> dco_decode_list_cue_tokens_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_cue_tokens_dto).toList();
+  }
+
+  @protected
+  List<EpubChapterDto> dco_decode_list_epub_chapter_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_epub_chapter_dto).toList();
   }
 
   @protected
@@ -554,6 +610,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ParseErrorKind dco_decode_parse_error_kind(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return ParseErrorKind.values[raw as int];
+  }
+
+  @protected
+  ParsedEpub dco_decode_parsed_epub(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return ParsedEpub(chapters: dco_decode_list_epub_chapter_dto(arr[0]));
   }
 
   @protected
@@ -660,6 +725,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  EpubChapterDto sse_decode_epub_chapter_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_index = sse_decode_u_32(deserializer);
+    var var_title = sse_decode_String(deserializer);
+    var var_paragraphs = sse_decode_list_String(deserializer);
+    return EpubChapterDto(
+      index: var_index,
+      title: var_title,
+      paragraphs: var_paragraphs,
+    );
+  }
+
+  @protected
+  EpubParseErrorKind sse_decode_epub_parse_error_kind(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return EpubParseErrorKind.values[inner];
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -699,6 +786,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <CueTokensDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_cue_tokens_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<EpubChapterDto> sse_decode_list_epub_chapter_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <EpubChapterDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_epub_chapter_dto(deserializer));
     }
     return ans_;
   }
@@ -769,6 +870,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return ParseErrorKind.values[inner];
+  }
+
+  @protected
+  ParsedEpub sse_decode_parsed_epub(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_chapters = sse_decode_list_epub_chapter_dto(deserializer);
+    return ParsedEpub(chapters: var_chapters);
   }
 
   @protected
@@ -868,6 +976,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_epub_chapter_dto(
+    EpubChapterDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.index, serializer);
+    sse_encode_String(self.title, serializer);
+    sse_encode_list_String(self.paragraphs, serializer);
+  }
+
+  @protected
+  void sse_encode_epub_parse_error_kind(
+    EpubParseErrorKind self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -900,6 +1028,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_cue_tokens_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_epub_chapter_dto(
+    List<EpubChapterDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_epub_chapter_dto(item, serializer);
     }
   }
 
@@ -976,6 +1116,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_parsed_epub(ParsedEpub self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_epub_chapter_dto(self.chapters, serializer);
   }
 
   @protected

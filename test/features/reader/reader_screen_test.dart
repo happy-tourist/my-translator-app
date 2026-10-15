@@ -8,6 +8,7 @@ import 'package:my_translator_app/app/theme.dart';
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
 import 'package:my_translator_app/data/library/document_content_store.dart';
+import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
@@ -712,6 +713,37 @@ void main() {
     expect(find.byKey(const Key('readerTranslationCueList')), findsNothing);
     expect(find.byKey(const Key('readerOriginalCueList')), findsOneWidget);
     expect(find.text('Cue line 0'), findsOneWidget);
+
+    final reloaded = await documents.getById(original.id);
+    expect(reloaded!.translationDocumentId, isNull);
+  });
+
+  testWidgets('RS-08 / LD-26: reject EPUB translation for subtitle original', (
+    tester,
+  ) async {
+    final original = await seedOriginal();
+    pumpOriginalDocumentId = original.id;
+    pumpPicker = () async => PickedTranslationFile(
+      fileName: 'ru.epub',
+      bytes: Uint8List.fromList([1, 2, 3]),
+    );
+    var parseCalled = false;
+    pumpParse = ({required bytes, formatHint}) async {
+      parseCalled = true;
+      return _parsedFromCues(_sampleCues(prefix: 'Tr'));
+    };
+
+    await pumpReader(tester);
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('readerTranslationLoad')));
+    await tester.pumpAndSettle();
+
+    expect(parseCalled, isFalse);
+    expect(find.byKey(const Key('readerTranslationErrorSnack')), findsOneWidget);
+    expect(find.text(incompatibleTranslationFormatMessage), findsOneWidget);
+    expect(find.byKey(const Key('readerTranslationEmpty')), findsOneWidget);
+    expect(find.byKey(const Key('readerTranslationCueList')), findsNothing);
 
     final reloaded = await documents.getById(original.id);
     expect(reloaded!.translationDocumentId, isNull);

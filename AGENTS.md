@@ -22,13 +22,13 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ## What This Application Is
 
-Мобильное и веб-приложение для **чтения субтитров и изучения языков через контекст**. Пользователь загружает файл субтитров, читает оригинал, тапает по незнакомым словам/фразам, получает перевод и сохраняет их в личный словарь. Сохранённые слова подсвечиваются при любом появлении, включая другие словоформы (подсветка по лемме).
+Мобильное и веб-приложение для **чтения субтитров / EPUB и изучения языков через контекст**. Пользователь загружает файл субтитров или книгу, читает оригинал, тапает по незнакомым словам/фразам, получает перевод и сохраняет их в личный словарь. Сохранённые слова подсвечиваются при любом появлении, включая другие словоформы (подсветка по лемме).
 
 Связка UI ↔ ядро — локальная, in-process FRB. Офлайн по умолчанию.
 
 ### Current vs target
 
-**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **5**). Library open → `loadBytes` → FRB `parseSubtitles` → cues-first **Reader** (`lib/features/reader/`) with optional **split** (second subtitle file, time-nearest sync, hidden linked translation via `translationDocumentId`) and optional **video frame strip** (Dart FFmpeg/canvas, Drift JPEG cache). Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). **Offline Translate** (OPUS-MT EN→RU) on Vocab + Reader sheets via `lib/data/translate/` (native Rust ORT / Web Transformers.js). Rust: `parse/` + `tokenize/` + `lemmatize/` + `translate/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI; **no** Rust video API).
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **5**). Library open → `loadBytes` → FRB `parseSubtitles` **or** `parseEpub` → cues-first **or** EPUB book-mode **Reader** (`lib/features/reader/`) with optional **split** (subtitle↔subtitle time-nearest **or** EPUB↔EPUB chapter-index sync; hidden linked translation via `translationDocumentId`) and optional **video frame strip** for subtitles only (Dart FFmpeg/canvas, Drift JPEG cache). Web EPUB bytes stored as **base64** in Drift `content`. Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). **Offline Translate** (OPUS-MT EN→RU) on Vocab + Reader sheets via `lib/data/translate/` (native Rust ORT / Web Transformers.js). Rust: `parse/` (+ `parse/epub`) + `tokenize/` + `lemmatize/` + `translate/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI; **no** Rust video API).
 
 **Ещё target:** phrase-span highlight / phrase Add; Rust cue pairing for index-aligned split — следующие changes.
 
@@ -38,30 +38,30 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Основные сценарии
 
-1. **Чтение субтитров** (сейчас) — загрузка SRT / VTT / ASS(SSA); парсинг в Rust; построчное отображение в Flutter.
+1. **Чтение субтитров / EPUB** (сейчас) — загрузка SRT / VTT / ASS(SSA) / EPUB; парсинг в Rust; cues или главы/абзацы в Flutter.
 2. **Изучение слов по тапу** (сейчас: single-token sheet; фраза — target) — тап по слову → лемма + «добавить/редактировать в словаре»; выделение фразы — later.
 3. **Подсветка знакомых слов** (сейчас) — записи словаря подсвечиваются в оригинале; матч по morph lemma (`run` / `running` / `ran` = одно слово).
-4. **Разделённый экран** (сейчас MVP) — сверху оригинал, снизу файл перевода; sync по ближайшему `startMs`, позже — по индексу при pairing.
+4. **Разделённый экран** (сейчас MVP) — сверху оригинал, снизу файл перевода; sync по ближайшему `startMs` (субтитры) или общему индексу главы (EPUB).
 5. **Работа с ИИ** (опционально, позже) — перевод фраз, фразовые глаголы, контекст; разные провайдеры через API.
 6. **Офлайн-перевод** (сейчас) — OPUS-MT EN→RU: кнопка Translate в Vocab / Reader sheets; native Rust ORT, Web Transformers.js, один Dart facade.
 
 ### Ключевые функции
 
-- Парсинг субтитров: SRT, VTT, ASS/SSA (сейчас)
+- Парсинг: SRT, VTT, ASS/SSA; EPUB → главы/абзацы (сейчас, rbook)
 - Токенизация + EN WordNet лемматизация + mark (сейчас); RU morph — later
 - Личный словарь: переводы + контекст + `surface_key` (сейчас, Drift schema 5)
 - Подсветка сохранённых слов с учётом морфологии (сейчас, original pane)
 - Тап → bottom CTA + add/edit vocab sheet (сейчас); Translate на sheet заполняет Translation (сейчас); мгновенная word-card chrome — later
 - Выделение фразы → перевод фразы целиком (target)
-- Split view: оригинал + файл перевода, sync scroll (MVP: nearest `startMs`)
+- Split view: оригинал + файл перевода; sync scroll (субтитры: nearest `startMs`; EPUB: chapter index)
 - Опциональный ИИ для перевода/объяснений (later)
 - Локальное хранение (папки/документы библиотеки, словарь, настройки later) — **Drift** в Flutter (`lib/`)
 - Работа офлайн
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import / open→Reader + best-effort linked translation / video) + **Vocab** (CRUD + Translate); cues-first Reader with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time sync + reading-anchor resume, optional video frame strip (`lib/data/video/`); Drift schema v5 (`surface_key`, video attachment + `DocumentVideoFrames`) + repositories; offline translate facade `lib/data/translate/`
-- Rust: `parse/` + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + `translate/` (native ORT) + FRB `parse_subtitles` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` / `init_offline_translate` / `translate_text` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
+- Flutter: shell **Library** (папки / import SRT·VTT·ASS·EPUB / open→Reader + best-effort linked translation / video for subtitles) + **Vocab** (CRUD + Translate); cues-first **or** EPUB book-mode Reader (chapter pager) with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time or chapter sync + format-gated reading-anchor resume, optional video frame strip (`lib/data/video/`); Drift schema v5 (`surface_key`, video attachment + `DocumentVideoFrames`; Web EPUB base64 in `content`) + repositories; offline translate facade `lib/data/translate/`
+- Rust: `parse/` (+ `parse/epub`, rbook) + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + `translate/` (native ORT) + FRB `parse_subtitles` / `parse_epub` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` / `init_offline_translate` / `translate_text` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold); Web MT — Transformers.js worker + `web/translate_bridge.js`
 
 ---
@@ -195,8 +195,8 @@ Package managers: pub (Dart), Cargo (`rust/`).
 Rust:
 
 1. `rust/src/lib.rs` — `mod parse` + `tokenize` + `lemmatize` + `translate` + `api` + `frb_generated`
-2. `rust/src/api/mod.rs` — `simple`, `parse`, `tokenize`, `translate`
-3. `rust/src/parse/` — subtitle parse core; `api/parse.rs` — тонкий FRB
+2. `rust/src/api/mod.rs` — `simple`, `parse`, `epub`, `tokenize`, `translate`
+3. `rust/src/parse/` — subtitle + `epub/` parse core; `api/parse.rs` / `api/epub.rs` — тонкий FRB
 4. `rust/src/tokenize/` + `lemmatize/` — panko spans + EN WordNet morph keys; thin exports on `api/tokenize.rs`
 5. `rust/src/translate/` + `api/translate.rs` — native ORT (`init_offline_translate` / `translate_text` / `is_offline_translate_ready`); Web — JS за facade, без FRB translate
 6. `rust/src/api/simple.rs` — scaffold demo (не product home)
@@ -271,6 +271,7 @@ lib/**  (Flutter UI + Drift data layer + translate facade)
 | Dart (generated) | Rust | Сейчас |
 |------------------|------|--------|
 | `parseSubtitles(bytes:, formatHint:)` | `api::parse::parse_subtitles` | SRT/VTT/ASS → cues + `ParseErrorKind` |
+| `parseEpub(bytes:)` | `api::epub::parse_epub` | EPUB → chapters/paragraphs + `EpubParseErrorKind` |
 | `tokenizeCues(texts:)` | `api::tokenize::tokenize_cues` | word tokens + char spans + `lemma_key` (`is_in_vocab=false`) |
 | `markVocabTokens(cues:, vocabLemmas:)` | `api::tokenize::mark_vocab_tokens` | sets `is_in_vocab` from morph lemma set |
 | `lemmaKeysForSurfaces(surfaces:)` | `api::tokenize::lemma_keys_for_surfaces` | surface→morph key (Vocab / stub→morph migration) |
@@ -296,8 +297,9 @@ Dictionary / library CRUD — **не** FRB storage API: persist через Drift
 ## Business Entities And Areas (target)
 
 - **Library folder** (`library/folders`) — дерево папок библиотеки (Drift)
-- **Library document** (`library/documents`) — subtitle-файл в папке (метаданные + bytes/path; Drift)
+- **Library document** (`library/documents`) — subtitle или EPUB в папке (метаданные + bytes/path; Drift; Web EPUB = base64 `content`)
 - **Subtitle cues** — распарсенные строки/таймкоды (Rust `parse/` → FRB; Reader отображает)
+- **EPUB chapters** (`parse/epub`, `reader/chapters`) — главы + plain paragraphs; book-mode pager; resume = chapter index in `lastReadStartMs`
 - **Token / Lemma** — единица тапа и ключ подсветки/словаря (Rust NLP)
 - **Dictionary entry** (`dictionary/entries`) — лемма, перевод(ы), контекст (Drift persist)
 - **Reader session** — открытый документ, позиция скролла, режим split

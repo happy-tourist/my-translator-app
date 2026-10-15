@@ -7,16 +7,21 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 
 import 'package:my_translator_app/data/database/app_database.dart';
 import 'package:my_translator_app/data/dictionary/dictionary_repository.dart';
+import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/document_repository.dart';
 import 'package:my_translator_app/data/library/folder_repository.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
+import 'package:my_translator_app/data/library/parse_epub_fn.dart';
 import 'package:my_translator_app/data/library/parse_error_messages.dart';
 import 'package:my_translator_app/data/library/parse_subtitles_fn.dart';
 import 'package:my_translator_app/data/translate/offline_translate.dart';
 import 'package:my_translator_app/features/reader/reader_screen.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
+import 'package:my_translator_app/src/rust/api/epub.dart' as rust_epub;
 import 'package:my_translator_app/src/rust/api/parse.dart' as rust_parse;
 
+export 'package:my_translator_app/data/library/parse_epub_fn.dart'
+    show ParseEpubFn;
 export 'package:my_translator_app/data/library/parse_subtitles_fn.dart'
     show ParseSubtitlesFn;
 
@@ -39,6 +44,7 @@ class LibraryScreen extends StatefulWidget {
     required this.dictionaryRepository,
     this.filePicker,
     this.parseSubtitles,
+    this.parseEpub,
     this.tokenizeCues,
     this.markVocabTokens,
     this.offlineTranslate,
@@ -51,6 +57,9 @@ class LibraryScreen extends StatefulWidget {
 
   /// Defaults to generated FRB [rust_parse.parseSubtitles].
   final ParseSubtitlesFn? parseSubtitles;
+
+  /// Defaults to generated FRB [rust_epub.parseEpub].
+  final ParseEpubFn? parseEpub;
 
   /// Passed through to [ReaderScreen] (test seam; defaults to FRB there).
   final TokenizeCuesFn? tokenizeCues;
@@ -77,6 +86,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   ParseSubtitlesFn get _parse =>
       widget.parseSubtitles ?? rust_parse.parseSubtitles;
+
+  ParseEpubFn get _parseEpub => widget.parseEpub ?? rust_epub.parseEpub;
 
   @override
   void initState() {
@@ -252,88 +263,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (_opening) return;
     setState(() => _opening = true);
     try {
-      final bytes = await widget.documentRepository.loadBytes(doc);
-      if (!mounted) return;
-      final parsed = await _parse(bytes: bytes, formatHint: doc.format);
-      if (!mounted) return;
-      // RC-05 / D4: never push Reader with zero cues (Rust should Err Empty).
-      if (parsed.cues.isEmpty) {
-        _showError(messageForParseError(rust_parse.ParseErrorKind.empty));
-        return;
+      if (isEpubFormat(doc.format)) {
+        await _openEpubDocument(doc);
+      } else {
+        await _openSubtitleDocument(doc);
       }
-
-      // LD-16 / RS-09: best-effort linked translation; failure must not block.
-      // Always pass translationDocumentId when a link exists so Reader can
-      // delete a stuck/unreadable satellite (empty pane → Delete → Load).
-      List<rust_parse.CueDto>? translationCues;
-      final translationDocumentId = doc.translationDocumentId;
-      if (translationDocumentId != null) {
-        try {
-          final linked =
-              await widget.documentRepository.loadLinkedTranslation(doc);
-          if (linked != null) {
-            final tBytes = await widget.documentRepository.loadBytes(linked);
-            final tParsed = await _parse(
-              bytes: tBytes,
-              formatHint: linked.format,
-            );
-            if (tParsed.cues.isNotEmpty) {
-              translationCues = tParsed.cues;
-            }
-          }
-        } catch (e, st) {
-          assert(() {
-            debugPrint('Linked translation open failed (ignored): $e\n$st');
-            return true;
-          }());
-        }
-      }
-
-      // LD-17 / RS-12: best-effort reading anchor; fail must not block open.
-      ReadingAnchor? initialReadingAnchor;
-      try {
-        initialReadingAnchor =
-            await widget.documentRepository.loadReadingAnchor(doc.id);
-      } catch (e, st) {
-        assert(() {
-          debugPrint('loadReadingAnchor failed (ignored): $e\n$st');
-          return true;
-        }());
-      }
-
-      // LD-19: best-effort video attachment; fail must not block open.
-      VideoAttachment? initialVideoAttachment;
-      try {
-        initialVideoAttachment =
-            await widget.documentRepository.getVideoAttachment(doc.id);
-      } catch (e, st) {
-        assert(() {
-          debugPrint('getVideoAttachment failed (ignored): $e\n$st');
-          return true;
-        }());
-      }
-
-      if (!mounted) return;
-      setState(() => _opening = false);
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ReaderScreen(
-            title: doc.title,
-            originalCues: parsed.cues,
-            originalDocumentId: doc.id,
-            documentRepository: widget.documentRepository,
-            dictionaryRepository: widget.dictionaryRepository,
-            translationCues: translationCues,
-            translationDocumentId: translationDocumentId,
-            initialReadingAnchor: initialReadingAnchor,
-            initialVideoAttachment: initialVideoAttachment,
-            parseSubtitles: widget.parseSubtitles,
-            tokenizeCues: widget.tokenizeCues,
-            markVocabTokens: widget.markVocabTokens,
-            offlineTranslate: widget.offlineTranslate,
-          ),
-        ),
-      );
+    } on rust_epub.EpubParseErrorKind catch (kind) {
+      _showError(messageForEpubParseError(kind));
     } on rust_parse.ParseErrorKind catch (kind) {
       _showError(messageForParseError(kind));
     } on AnyhowException catch (e) {
@@ -358,6 +294,155 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (mounted && _opening) {
         setState(() => _opening = false);
       }
+    }
+  }
+
+  Future<void> _openSubtitleDocument(Document doc) async {
+    final bytes = await widget.documentRepository.loadBytes(doc);
+    if (!mounted) return;
+    final parsed = await _parse(bytes: bytes, formatHint: doc.format);
+    if (!mounted) return;
+    // RC-05 / D4: never push Reader with zero cues (Rust should Err Empty).
+    if (parsed.cues.isEmpty) {
+      _showError(messageForParseError(rust_parse.ParseErrorKind.empty));
+      return;
+    }
+
+    // LD-16 / RS-09: best-effort linked translation; failure must not block.
+    // Always pass translationDocumentId when a link exists so Reader can
+    // delete a stuck/unreadable satellite (empty pane → Delete → Load).
+    List<rust_parse.CueDto>? translationCues;
+    final translationDocumentId = doc.translationDocumentId;
+    if (translationDocumentId != null) {
+      try {
+        final linked =
+            await widget.documentRepository.loadLinkedTranslation(doc);
+        if (linked != null && !isEpubFormat(linked.format)) {
+          final tBytes = await widget.documentRepository.loadBytes(linked);
+          final tParsed = await _parse(
+            bytes: tBytes,
+            formatHint: linked.format,
+          );
+          if (tParsed.cues.isNotEmpty) {
+            translationCues = tParsed.cues;
+          }
+        }
+      } catch (e, st) {
+        assert(() {
+          debugPrint('Linked translation open failed (ignored): $e\n$st');
+          return true;
+        }());
+      }
+    }
+
+    final initialReadingAnchor = await _loadReadingAnchorBestEffort(doc.id);
+    final initialVideoAttachment = await _loadVideoAttachmentBestEffort(doc.id);
+
+    if (!mounted) return;
+    setState(() => _opening = false);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ReaderScreen(
+          title: doc.title,
+          originalCues: parsed.cues,
+          originalDocumentId: doc.id,
+          documentRepository: widget.documentRepository,
+          dictionaryRepository: widget.dictionaryRepository,
+          documentFormat: doc.format,
+          translationCues: translationCues,
+          translationDocumentId: translationDocumentId,
+          initialReadingAnchor: initialReadingAnchor,
+          initialVideoAttachment: initialVideoAttachment,
+          parseSubtitles: widget.parseSubtitles,
+          parseEpub: widget.parseEpub,
+          tokenizeCues: widget.tokenizeCues,
+          markVocabTokens: widget.markVocabTokens,
+          offlineTranslate: widget.offlineTranslate,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openEpubDocument(Document doc) async {
+    final bytes = await widget.documentRepository.loadBytes(doc);
+    if (!mounted) return;
+    final parsed = await _parseEpub(bytes: bytes);
+    if (!mounted) return;
+    if (parsed.chapters.isEmpty) {
+      _showError(messageForEpubParseError(rust_epub.EpubParseErrorKind.empty));
+      return;
+    }
+
+    // LD-16: best-effort linked EPUB translation via parse_epub only.
+    List<rust_epub.EpubChapterDto>? translationChapters;
+    final translationDocumentId = doc.translationDocumentId;
+    if (translationDocumentId != null) {
+      try {
+        final linked =
+            await widget.documentRepository.loadLinkedTranslation(doc);
+        if (linked != null && isEpubFormat(linked.format)) {
+          final tBytes = await widget.documentRepository.loadBytes(linked);
+          final tParsed = await _parseEpub(bytes: tBytes);
+          if (tParsed.chapters.isNotEmpty) {
+            translationChapters = tParsed.chapters;
+          }
+        }
+      } catch (e, st) {
+        assert(() {
+          debugPrint('Linked EPUB translation open failed (ignored): $e\n$st');
+          return true;
+        }());
+      }
+    }
+
+    final initialReadingAnchor = await _loadReadingAnchorBestEffort(doc.id);
+    // LD-19 / D4: do not restore video attachment for EPUB.
+
+    if (!mounted) return;
+    setState(() => _opening = false);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ReaderScreen(
+          title: doc.title,
+          originalDocumentId: doc.id,
+          documentRepository: widget.documentRepository,
+          dictionaryRepository: widget.dictionaryRepository,
+          documentFormat: documentFormatEpub,
+          originalChapters: parsed.chapters,
+          translationChapters: translationChapters,
+          translationDocumentId: translationDocumentId,
+          initialReadingAnchor: initialReadingAnchor,
+          parseSubtitles: widget.parseSubtitles,
+          parseEpub: widget.parseEpub,
+          tokenizeCues: widget.tokenizeCues,
+          markVocabTokens: widget.markVocabTokens,
+          offlineTranslate: widget.offlineTranslate,
+        ),
+      ),
+    );
+  }
+
+  Future<ReadingAnchor?> _loadReadingAnchorBestEffort(int documentId) async {
+    try {
+      return await widget.documentRepository.loadReadingAnchor(documentId);
+    } catch (e, st) {
+      assert(() {
+        debugPrint('loadReadingAnchor failed (ignored): $e\n$st');
+        return true;
+      }());
+      return null;
+    }
+  }
+
+  Future<VideoAttachment?> _loadVideoAttachmentBestEffort(int documentId) async {
+    try {
+      return await widget.documentRepository.getVideoAttachment(documentId);
+    } catch (e, st) {
+      assert(() {
+        debugPrint('getVideoAttachment failed (ignored): $e\n$st');
+        return true;
+      }());
+      return null;
     }
   }
 
@@ -388,7 +473,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           if (_currentFolderId != null)
             IconButton(
               key: const Key('libraryImportButton'),
-              tooltip: 'Import subtitle',
+              tooltip: 'Import subtitle or EPUB',
               icon: const Icon(Icons.file_upload_outlined),
               onPressed: _importFile,
             ),

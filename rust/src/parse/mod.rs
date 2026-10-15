@@ -11,11 +11,13 @@
 mod ass;
 mod cue;
 mod detect;
+mod epub;
 mod error;
 mod srt;
 mod vtt;
 
 pub use cue::{Cue, ParsedDocument};
+pub use epub::{parse_epub, EpubChapter, EpubDocument, EpubParseError};
 pub use error::ParseError;
 
 /// Detected / requested subtitle format.

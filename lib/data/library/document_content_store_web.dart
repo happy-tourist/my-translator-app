@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'document_content_store.dart';
@@ -10,9 +9,10 @@ class _WebDocumentContentStore implements DocumentContentStore {
   Future<StoredDocumentBytes> store({
     required String fileName,
     required Uint8List bytes,
+    String? format,
   }) async {
     return StoredDocumentBytes(
-      content: utf8.decode(bytes, allowMalformed: true),
+      content: encodeWebDocumentContent(bytes, format: format),
     );
   }
 
