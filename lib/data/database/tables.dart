@@ -9,10 +9,11 @@ class Folders extends Table {
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
 }
 
-/// Subtitle document in a folder (`library/documents`). Never root-level.
+/// Subtitle/EPUB document in a folder or library root (`library/documents`).
+/// Null [folderId] = root-level document.
 class Documents extends Table {
   IntColumn get id => integer().autoIncrement()();
-  IntColumn get folderId => integer().references(Folders, #id)();
+  IntColumn get folderId => integer().nullable().references(Folders, #id)();
   TextColumn get title => text()();
   /// One of: `srt`, `vtt`, `ass` (`.ssa` maps to `ass`).
   TextColumn get format => text()();

@@ -56,15 +56,29 @@ void main() {
     expect(listed.map((d) => d.title), contains('episode1'));
   });
 
-  test('LD-02: Reject import without folder', () async {
-    expect(
-      () => documents.importIntoFolder(
-        folderId: null,
-        fileName: 'episode1.srt',
-        bytes: _srtBytes(),
-      ),
-      throwsA(isA<LibraryValidationException>()),
+  test('LD-02: Import at library root succeeds', () async {
+    final doc = await documents.importIntoFolder(
+      folderId: null,
+      fileName: 'episode1.srt',
+      bytes: _srtBytes(),
     );
+    expect(doc.title, 'episode1');
+    expect(doc.format, 'srt');
+    expect(doc.folderId, isNull);
+    final listed = await documents.listVisible(folderId: null);
+    expect(listed.map((d) => d.id), contains(doc.id));
+  });
+
+  test('LD-29: List root documents', () async {
+    await folders.createFolder(name: 'S01');
+    final rootDoc = await documents.importIntoFolder(
+      folderId: null,
+      fileName: 'root.srt',
+      bytes: _srtBytes('root'),
+    );
+    final listed = await documents.listVisible(folderId: null);
+    expect(listed.map((d) => d.id), [rootDoc.id]);
+    expect(listed.single.folderId, isNull);
   });
 
   test('LD-03: Reject unsupported file type', () async {
@@ -218,6 +232,32 @@ void main() {
     final linked = await documents.loadLinkedTranslation(reloadedOriginal);
     expect(linked, isNotNull);
     expect(linked!.id, translation.id);
+    final loaded = await documents.loadBytes(linked);
+    expect(utf8.decode(loaded), contains('перевод'));
+  });
+
+  test('LD-13: Persist translation linked to root original', () async {
+    final original = await documents.importIntoFolder(
+      folderId: null,
+      fileName: 'original.srt',
+      bytes: _srtBytes('original'),
+    );
+    expect(original.folderId, isNull);
+    final translation = await documents.attachTranslation(
+      originalDocumentId: original.id,
+      fileName: 'ru.srt',
+      bytes: _srtBytes('перевод'),
+    );
+    expect(translation.folderId, isNull);
+    final listed = await documents.listVisible(folderId: null);
+    expect(listed.map((d) => d.id), [original.id]);
+    expect(listed.map((d) => d.id), isNot(contains(translation.id)));
+
+    final reloadedOriginal = await documents.getById(original.id);
+    expect(reloadedOriginal!.translationDocumentId, translation.id);
+    final linked = await documents.loadLinkedTranslation(reloadedOriginal);
+    expect(linked, isNotNull);
+    expect(linked!.folderId, isNull);
     final loaded = await documents.loadBytes(linked);
     expect(utf8.decode(loaded), contains('перевод'));
   });

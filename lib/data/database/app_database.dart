@@ -21,7 +21,7 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.connect() => AppDatabase(_openConnection());
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -54,6 +54,11 @@ class AppDatabase extends _$AppDatabase {
       // Schema 6: durable full-video bytes (Web reopen after blob URL dies).
       if (from < 6) {
         await migrator.createTable(documentVideoMedia);
+      }
+      // Schema 7: Documents.folderId nullable (root-level docs). SQLite cannot
+      // drop NOT NULL via ALTER — recreate table (TableMigration / customStatement).
+      if (from < 7) {
+        await migrator.alterTable(TableMigration(documents));
       }
     },
   );

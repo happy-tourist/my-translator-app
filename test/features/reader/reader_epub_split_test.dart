@@ -247,7 +247,59 @@ void main() {
     expect(reloaded!.translationDocumentId, isNull);
   });
 
-  testWidgets('RS-14 / RS-15: Chapter pager syncs both panes', (tester) async {
+  testWidgets(
+    'RS-14 / RS-15 / RC-10: Chapter pager is independent per pane',
+    (tester) async {
+      pumpOriginalChapters = _chapters(count: 3, paraPrefix: 'Orig');
+      pumpTranslationChapters = _chapters(
+        count: 3,
+        titlePrefix: 'TrChapter',
+        paraPrefix: 'TrPara',
+      );
+      pumpTranslationDocumentId = 99;
+
+      await pumpBookReader(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 / 3'), findsNWidgets(2));
+      expect(find.text('Chapter 1'), findsOneWidget);
+      expect(find.text('TrChapter 1'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+      await tester.pumpAndSettle();
+
+      // Top advances; bottom stays (no realtime pager sync).
+      expect(find.text('2 / 3'), findsOneWidget);
+      expect(find.text('1 / 3'), findsOneWidget);
+      expect(find.text('Chapter 2'), findsOneWidget);
+      expect(find.text('TrChapter 1'), findsOneWidget);
+      expect(find.text('TrPara 1 body'), findsOneWidget);
+      expect(find.byKey(const Key('readerBookParagraphList_1')), findsOneWidget);
+      expect(
+        find.byKey(const Key('readerTranslationBookParagraphList_0')),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('readerTranslationBookChapterNext')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('2 / 3'), findsNWidgets(2));
+      expect(find.text('Chapter 2'), findsOneWidget);
+      expect(find.text('TrChapter 2'), findsOneWidget);
+      expect(find.byKey(const Key('readerBookParagraphList_1')), findsOneWidget);
+      expect(
+        find.byKey(const Key('readerTranslationBookParagraphList_1')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('RS-19: Show split one-shot aligns EPUB chapters', (
+    tester,
+  ) async {
     pumpOriginalChapters = _chapters(count: 3, paraPrefix: 'Orig');
     pumpTranslationChapters = _chapters(
       count: 3,
@@ -257,39 +309,66 @@ void main() {
     pumpTranslationDocumentId = 99;
 
     await pumpBookReader(tester);
-    await tester.tap(find.byKey(const Key('readerSplitToggle')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('1 / 3'), findsNWidgets(2));
-    expect(find.text('Chapter 1'), findsOneWidget);
-    expect(find.text('TrChapter 1'), findsOneWidget);
-
     await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 3'), findsOneWidget);
+    expect(find.text('Chapter 2'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await tester.pumpAndSettle();
 
     expect(find.text('2 / 3'), findsNWidgets(2));
     expect(find.text('Chapter 2'), findsOneWidget);
     expect(find.text('TrChapter 2'), findsOneWidget);
-    // Original pane is tokenized (TextSpans); translation stays plain text.
-    expect(find.textContaining('Orig'), findsWidgets);
-    expect(find.text('TrPara 2 body'), findsOneWidget);
-    expect(find.byKey(const Key('readerBookParagraphList_1')), findsOneWidget);
-    expect(
-      find.byKey(const Key('readerTranslationBookParagraphList_1')),
-      findsOneWidget,
-    );
 
-    await tester.tap(find.byKey(const Key('readerTranslationBookChapterNext')));
+    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
     await tester.pumpAndSettle();
 
-    expect(find.text('3 / 3'), findsNWidgets(2));
+    expect(find.text('3 / 3'), findsOneWidget);
+    expect(find.text('2 / 3'), findsOneWidget);
     expect(find.text('Chapter 3'), findsOneWidget);
-    expect(find.text('TrChapter 3'), findsOneWidget);
-    expect(find.byKey(const Key('readerBookParagraphList_2')), findsOneWidget);
-    expect(
-      find.byKey(const Key('readerTranslationBookParagraphList_2')),
-      findsOneWidget,
+    expect(find.text('TrChapter 2'), findsOneWidget);
+  });
+
+  testWidgets('RS-20: Load EPUB translation one-shot aligns chapters', (
+    tester,
+  ) async {
+    final original = await seedEpubDoc();
+    pumpOriginalDocumentId = original.id;
+    pumpOriginalChapters = _chapters(count: 3, paraPrefix: 'Orig');
+    final translationChapters = _chapters(
+      count: 3,
+      titlePrefix: 'TrChapter',
+      paraPrefix: 'TrPara',
     );
+    pumpPicker = () async => PickedTranslationFile(
+          fileName: 'ru.epub',
+          bytes: Uint8List.fromList([1, 2, 3]),
+        );
+    pumpParseEpub = ({required bytes}) async =>
+        ParsedEpub(chapters: translationChapters);
+
+    await pumpBookReader(tester);
+    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 3'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('readerSplitToggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('readerTranslationLoad')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 / 3'), findsNWidgets(2));
+    expect(find.text('Chapter 2'), findsOneWidget);
+    expect(find.text('TrChapter 2'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('3 / 3'), findsOneWidget);
+    expect(find.text('2 / 3'), findsOneWidget);
+    expect(find.text('Chapter 3'), findsOneWidget);
+    expect(find.text('TrChapter 2'), findsOneWidget);
   });
 
   testWidgets('RS-16: Mismatched chapter counts show error and clamp', (
@@ -311,6 +390,13 @@ void main() {
         ParsedEpub(chapters: translationChapters);
 
     await pumpBookReader(tester);
+    // Advance original to chapter 3 before load so one-shot must clamp.
+    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+    await tester.pumpAndSettle();
+    expect(find.text('3 / 3'), findsOneWidget);
+
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('readerTranslationLoad')));
@@ -319,16 +405,16 @@ void main() {
     expect(find.byKey(const Key('readerTranslationErrorSnack')), findsOneWidget);
     expect(find.text(mismatchedEpubChapterCountMessage), findsOneWidget);
     expect(find.byKey(const Key('readerTranslationBookPane')), findsOneWidget);
-
-    // Advance original to chapter 3; translation clamps to last (2).
-    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('readerBookChapterNext')));
-    await tester.pumpAndSettle();
-
     expect(find.text('3 / 3'), findsOneWidget);
     expect(find.text('2 / 2'), findsOneWidget);
     expect(find.text('Chapter 3'), findsOneWidget);
+    expect(find.text('TrChapter 2'), findsOneWidget);
+
+    // Independent: moving original does not drag translation.
+    await tester.tap(find.byKey(const Key('readerBookChapterPrev')));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 3'), findsOneWidget);
+    expect(find.text('2 / 2'), findsOneWidget);
     expect(find.text('TrChapter 2'), findsOneWidget);
   });
 

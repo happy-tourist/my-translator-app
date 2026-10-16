@@ -230,9 +230,13 @@ class _LightweightSelectableCueText extends StatelessWidget {
 
   void _onTapUp(TapUpDetails details, double maxWidth, BuildContext context) {
     final spanTree = _buildSpanTree(context);
+    // Match ambient Text.rich metrics so offset→char stays accurate under
+    // text scale / RTL (D11 hit-test miss risk).
     final painter = TextPainter(
       text: spanTree,
-      textDirection: TextDirection.ltr,
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.maybeLocaleOf(context),
     )..layout(maxWidth: maxWidth);
     final pos = painter.getPositionForOffset(details.localPosition);
     var charIndex = cueUtf16OffsetToCharIndex(cueText, pos.offset);

@@ -378,9 +378,9 @@ class $DocumentsTable extends Documents
   late final GeneratedColumn<int> folderId = GeneratedColumn<int>(
     'folder_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.int,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
     defaultConstraints: GeneratedColumn.constraintIsAlways(
       'REFERENCES folders (id)',
     ),
@@ -566,8 +566,6 @@ class $DocumentsTable extends Documents
         _folderIdMeta,
         folderId.isAcceptableOrUnknown(data['folder_id']!, _folderIdMeta),
       );
-    } else if (isInserting) {
-      context.missing(_folderIdMeta);
     }
     if (data.containsKey('title')) {
       context.handle(
@@ -685,7 +683,7 @@ class $DocumentsTable extends Documents
       folderId: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}folder_id'],
-      )!,
+      ),
       title: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}title'],
@@ -749,7 +747,7 @@ class $DocumentsTable extends Documents
 
 class Document extends DataClass implements Insertable<Document> {
   final int id;
-  final int folderId;
+  final int? folderId;
   final String title;
 
   /// One of: `srt`, `vtt`, `ass` (`.ssa` maps to `ass`).
@@ -785,7 +783,7 @@ class Document extends DataClass implements Insertable<Document> {
   final DateTime updatedAt;
   const Document({
     required this.id,
-    required this.folderId,
+    this.folderId,
     required this.title,
     required this.format,
     this.storageKey,
@@ -804,7 +802,9 @@ class Document extends DataClass implements Insertable<Document> {
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
-    map['folder_id'] = Variable<int>(folderId);
+    if (!nullToAbsent || folderId != null) {
+      map['folder_id'] = Variable<int>(folderId);
+    }
     map['title'] = Variable<String>(title);
     map['format'] = Variable<String>(format);
     if (!nullToAbsent || storageKey != null) {
@@ -842,7 +842,9 @@ class Document extends DataClass implements Insertable<Document> {
   DocumentsCompanion toCompanion(bool nullToAbsent) {
     return DocumentsCompanion(
       id: Value(id),
-      folderId: Value(folderId),
+      folderId: folderId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(folderId),
       title: Value(title),
       format: Value(format),
       storageKey: storageKey == null && nullToAbsent
@@ -884,7 +886,7 @@ class Document extends DataClass implements Insertable<Document> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return Document(
       id: serializer.fromJson<int>(json['id']),
-      folderId: serializer.fromJson<int>(json['folderId']),
+      folderId: serializer.fromJson<int?>(json['folderId']),
       title: serializer.fromJson<String>(json['title']),
       format: serializer.fromJson<String>(json['format']),
       storageKey: serializer.fromJson<String?>(json['storageKey']),
@@ -909,7 +911,7 @@ class Document extends DataClass implements Insertable<Document> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
-      'folderId': serializer.toJson<int>(folderId),
+      'folderId': serializer.toJson<int?>(folderId),
       'title': serializer.toJson<String>(title),
       'format': serializer.toJson<String>(format),
       'storageKey': serializer.toJson<String?>(storageKey),
@@ -928,7 +930,7 @@ class Document extends DataClass implements Insertable<Document> {
 
   Document copyWith({
     int? id,
-    int? folderId,
+    Value<int?> folderId = const Value.absent(),
     String? title,
     String? format,
     Value<String?> storageKey = const Value.absent(),
@@ -944,7 +946,7 @@ class Document extends DataClass implements Insertable<Document> {
     DateTime? updatedAt,
   }) => Document(
     id: id ?? this.id,
-    folderId: folderId ?? this.folderId,
+    folderId: folderId.present ? folderId.value : this.folderId,
     title: title ?? this.title,
     format: format ?? this.format,
     storageKey: storageKey.present ? storageKey.value : this.storageKey,
@@ -1068,7 +1070,7 @@ class Document extends DataClass implements Insertable<Document> {
 
 class DocumentsCompanion extends UpdateCompanion<Document> {
   final Value<int> id;
-  final Value<int> folderId;
+  final Value<int?> folderId;
   final Value<String> title;
   final Value<String> format;
   final Value<String?> storageKey;
@@ -1101,7 +1103,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
   });
   DocumentsCompanion.insert({
     this.id = const Value.absent(),
-    required int folderId,
+    this.folderId = const Value.absent(),
     required String title,
     required String format,
     this.storageKey = const Value.absent(),
@@ -1115,8 +1117,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.videoLastFramePage = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
-  }) : folderId = Value(folderId),
-       title = Value(title),
+  }) : title = Value(title),
        format = Value(format);
   static Insertable<Document> custom({
     Expression<int>? id,
@@ -1158,7 +1159,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
 
   DocumentsCompanion copyWith({
     Value<int>? id,
-    Value<int>? folderId,
+    Value<int?>? folderId,
     Value<String>? title,
     Value<String>? format,
     Value<String?>? storageKey,
@@ -2696,7 +2697,7 @@ typedef $$FoldersTableProcessedTableManager =
     >;
 typedef $$DocumentsTableCreateCompanionBuilder = DocumentsCompanion Function({
   Value<int> id,
-  required int folderId,
+  Value<int?> folderId,
   required String title,
   required String format,
   Value<String?> storageKey,
@@ -2713,7 +2714,7 @@ typedef $$DocumentsTableCreateCompanionBuilder = DocumentsCompanion Function({
 });
 typedef $$DocumentsTableUpdateCompanionBuilder = DocumentsCompanion Function({
   Value<int> id,
-  Value<int> folderId,
+  Value<int?> folderId,
   Value<String> title,
   Value<String> format,
   Value<String?> storageKey,
@@ -2736,9 +2737,9 @@ final class $$DocumentsTableReferences
   static $FoldersTable _folderIdTable(_$AppDatabase db) =>
       db.folders.createAlias('documents__folder_id__folders__id');
 
-  $$FoldersTableProcessedTableManager get folderId {
-    final $_column = $_itemColumn<int>('folder_id')!;
-
+  $$FoldersTableProcessedTableManager? get folderId {
+    final $_column = $_itemColumn<int>('folder_id');
+    if ($_column == null) return null;
     final manager = $$FoldersTableTableManager(
       $_db,
       $_db.folders,
@@ -3304,7 +3305,7 @@ class $$DocumentsTableTableManager
           updateCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
-                Value<int> folderId = const Value.absent(),
+                Value<int?> folderId = const Value.absent(),
                 Value<String> title = const Value.absent(),
                 Value<String> format = const Value.absent(),
                 Value<String?> storageKey = const Value.absent(),
@@ -3338,7 +3339,7 @@ class $$DocumentsTableTableManager
           createCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
-                required int folderId,
+                Value<int?> folderId = const Value.absent(),
                 required String title,
                 required String format,
                 Value<String?> storageKey = const Value.absent(),

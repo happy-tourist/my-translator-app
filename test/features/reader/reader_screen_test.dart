@@ -604,7 +604,7 @@ void main() {
     expect(find.text(translationCues[expected].textLines.first), findsOneWidget);
   });
 
-  testWidgets('RS-06: Scroll sync time then pixel on settle', (tester) async {
+  testWidgets('RS-06: Scroll settle does not sync other pane', (tester) async {
     final originalCues = _sampleCues(count: 40, prefix: 'Orig');
     final translationCues = _sampleCues(
       count: 40,
@@ -618,7 +618,19 @@ void main() {
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await tester.pumpAndSettle();
 
+    // After Show one-shot, translation is near cue 0.
     expect(find.text('Tr 0'), findsOneWidget);
+    final trBefore = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerTranslationCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Tr '))
+        .toList();
+    expect(trBefore, isNotEmpty);
+    final trIndexBefore = int.parse(trBefore.first.replaceFirst('Tr ', ''));
 
     await tester.drag(
       find.byKey(const Key('readerOriginalCueList')),
@@ -637,13 +649,22 @@ void main() {
         .toList();
     expect(origVisible, isNotEmpty);
     final anchorIndex = int.parse(origVisible.first.replaceFirst('Orig ', ''));
-    final expected = nearestCueIndex(
-      translationCues,
-      originalCues[anchorIndex].startMs,
-    );
+    expect(anchorIndex, greaterThan(0));
 
-    expect(find.byKey(Key('readerTranslationCue_$expected')), findsOneWidget);
-    expect(find.text('Tr $expected'), findsOneWidget);
+    // Realtime settle-sync removed (D1): bottom stays where one-shot left it.
+    final trAfter = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerTranslationCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Tr '))
+        .toList();
+    expect(trAfter, isNotEmpty);
+    final trIndexAfter = int.parse(trAfter.first.replaceFirst('Tr ', ''));
+    expect(trIndexAfter, trIndexBefore);
+    expect(find.text('Tr $trIndexBefore'), findsOneWidget);
   });
 
   testWidgets('RS-07 / LD-14: Delete translation returns to empty and unlinks', (
@@ -686,7 +707,7 @@ void main() {
     final reloaded = await documents.getById(original.id);
     expect(reloaded!.translationDocumentId, isNull);
     expect(await documents.getById(translation.id), isNull);
-    final listed = await documents.listInFolder(original.folderId);
+    final listed = await documents.listVisible(folderId: original.folderId);
     expect(listed.map((d) => d.id), [original.id]);
   });
 
@@ -814,7 +835,7 @@ void main() {
   });
 
   testWidgets(
-    'Show split syncs translation pane to original anchor',
+    'RS-18: Show split one-shot syncs translation pane',
     (tester) async {
       final originalCues = _sampleCues(count: 40, prefix: 'Orig');
       final translationCues = _sampleCues(
@@ -875,6 +896,27 @@ void main() {
       // Must not stay at cue 0 when original was scrolled far.
       expect(trIndex, greaterThan(0));
       expect((trIndex - expected).abs(), lessThanOrEqualTo(2));
+
+      // Subsequent scroll must not re-sync the other pane (RS-18 / RS-06).
+      await tester.drag(
+        find.byKey(const Key('readerOriginalCueList')),
+        const Offset(0, -2000),
+      );
+      await tester.pumpAndSettle();
+      final trAfterScroll = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerTranslationCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Tr '))
+          .toList();
+      expect(trAfterScroll, isNotEmpty);
+      expect(
+        int.parse(trAfterScroll.first.replaceFirst('Tr ', '')),
+        trIndex,
+      );
     },
   );
 
@@ -2290,7 +2332,9 @@ void main() {
     expect(find.byKey(const Key('videoFrameSlot_600')), findsOneWidget);
   });
 
-  testWidgets('VF-06: Original page change syncs translation', (tester) async {
+  testWidgets('VF-06: Original page change does not sync translation', (
+    tester,
+  ) async {
     final original = await seedOriginal();
     pumpOriginalDocumentId = original.id;
     pumpCues = _sampleCues(count: 40, startStepMs: 1000);
@@ -2308,13 +2352,45 @@ void main() {
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await pumpVideoUi(tester);
 
+    // Show one-shot aligns to current second (0); then scroll translation away.
+    expect(find.text('Tr 0'), findsOneWidget);
+    await tester.drag(
+      find.byKey(const Key('readerTranslationCueList')),
+      const Offset(0, -2500),
+    );
+    await pumpVideoUi(tester);
+    await tester.pump(const Duration(milliseconds: 200));
+
+    final trBefore = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerTranslationCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Tr '))
+        .toList();
+    expect(trBefore, isNotEmpty);
+    final trIndexBefore = int.parse(trBefore.first.replaceFirst('Tr ', ''));
+    expect(trIndexBefore, greaterThan(0));
+
     pagesState(tester).jumpToSecond(12);
     await pumpVideoUi(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.byKey(const Key('readerTranslationCue_12')), findsOneWidget);
-    expect(find.text('Tr 12'), findsOneWidget);
+    expect(pagesState(tester).currentSecond, 12);
+    final trAfter = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('readerTranslationCueList')),
+          matching: find.byType(Text),
+        ))
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((s) => s.startsWith('Tr '))
+        .toList();
+    expect(trAfter, isNotEmpty);
+    expect(int.parse(trAfter.first.replaceFirst('Tr ', '')), trIndexBefore);
   });
 
   testWidgets('VF-07: Bottom scroll does not move original page', (

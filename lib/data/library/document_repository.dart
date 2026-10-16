@@ -66,23 +66,20 @@ class DocumentRepository {
   final AppDatabase _db;
   final DocumentContentStore contentStore;
 
-  /// Imports a subtitle or EPUB file into an existing folder.
-  /// Rejects root / bad types (LD-02 / LD-03 / LD-24).
+  /// Imports a subtitle or EPUB file into a folder or library root.
+  /// [folderId] null = root (LD-02). Rejects bad types (LD-03 / LD-24).
   Future<Document> importIntoFolder({
     required int? folderId,
     required String fileName,
     required Uint8List bytes,
   }) async {
-    if (folderId == null) {
-      throw LibraryValidationException(
-        'Import requires a selected folder; documents cannot live at library root',
-      );
-    }
-    final folder = await (_db.select(
-      _db.folders,
-    )..where((f) => f.id.equals(folderId))).getSingleOrNull();
-    if (folder == null) {
-      throw LibraryValidationException('Folder not found');
+    if (folderId != null) {
+      final folder = await (_db.select(
+        _db.folders,
+      )..where((f) => f.id.equals(folderId))).getSingleOrNull();
+      if (folder == null) {
+        throw LibraryValidationException('Folder not found');
+      }
     }
 
     final format = formatFromFileName(fileName);
@@ -101,7 +98,7 @@ class DocumentRepository {
           .into(_db.documents)
           .insert(
             DocumentsCompanion.insert(
-              folderId: folderId,
+              folderId: Value(folderId),
               title: title,
               format: format,
               storageKey: Value(stored.storageKey),
@@ -118,17 +115,25 @@ class DocumentRepository {
     }
   }
 
-  /// Visible documents in [folderId] (hides linked translation satellites).
-  Future<List<Document>> listInFolder(int folderId) async {
+  /// Visible documents at [folderId] (null = root). Hides translation satellites.
+  Future<List<Document>> listVisible({int? folderId}) async {
     final hiddenIds = await _hiddenTranslationIds();
     final query = _db.select(_db.documents)
-      ..where((d) => d.folderId.equals(folderId))
+      ..where(
+        (d) => folderId == null
+            ? d.folderId.isNull()
+            : d.folderId.equals(folderId),
+      )
       ..orderBy([(d) => OrderingTerm.asc(d.title)]);
     if (hiddenIds.isNotEmpty) {
       query.where((d) => d.id.isNotIn(hiddenIds));
     }
     return query.get();
   }
+
+  /// Visible documents in [folderId] (thin wrapper over [listVisible]).
+  Future<List<Document>> listInFolder(int folderId) =>
+      listVisible(folderId: folderId);
 
   Future<Document?> getById(int id) {
     return (_db.select(
@@ -189,7 +194,7 @@ class DocumentRepository {
             .into(_db.documents)
             .insert(
               DocumentsCompanion.insert(
-                folderId: original.folderId,
+                folderId: Value(original.folderId),
                 title: title,
                 format: format,
                 storageKey: Value(stored.storageKey),

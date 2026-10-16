@@ -104,16 +104,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final folders = await widget.folderRepository.listChildren(
         _currentFolderId,
       );
-      final documents = _currentFolderId == null
-          ? <Document>[]
-          : await widget.documentRepository.listInFolder(_currentFolderId!);
+      // Root and folder: visible docs via listVisible (null folderId = root).
+      final documents = await widget.documentRepository.listVisible(
+        folderId: _currentFolderId,
+      );
       if (!mounted) return;
       setState(() {
         _folders = folders;
         _documents = documents;
         _loading = false;
       });
-    } catch (e) {
+    } catch (e, st) {
+      assert(() {
+        debugPrint('library reload: $e\n$st');
+        return true;
+      }());
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -149,12 +154,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _importFile() async {
-    if (_currentFolderId == null) return;
     try {
       final picked = widget.filePicker != null
           ? await widget.filePicker!()
           : await _defaultPick();
       if (picked == null || !mounted) return;
+      // null folderId = library root (LD-02).
       await widget.documentRepository.importIntoFolder(
         folderId: _currentFolderId,
         fileName: picked.fileName,
@@ -164,7 +169,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
       await _reload();
     } on LibraryValidationException catch (e) {
       if (mounted) _showError(e.message);
-    } catch (e) {
+    } catch (e, st) {
+      assert(() {
+        debugPrint('library import: $e\n$st');
+        return true;
+      }());
       if (mounted) _showError('Could not import file');
     }
   }
@@ -470,13 +479,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
             icon: const Icon(Icons.create_new_folder_outlined),
             onPressed: _createFolder,
           ),
-          if (_currentFolderId != null)
-            IconButton(
-              key: const Key('libraryImportButton'),
-              tooltip: 'Import subtitle or EPUB',
-              icon: const Icon(Icons.file_upload_outlined),
-              onPressed: _importFile,
-            ),
+          IconButton(
+            key: const Key('libraryImportButton'),
+            tooltip: 'Import subtitle or EPUB',
+            icon: const Icon(Icons.file_upload_outlined),
+            onPressed: _importFile,
+          ),
         ],
       ),
       body: _buildBody(isEmpty),
@@ -507,6 +515,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
     }
     if (isEmpty) {
+      final atRoot = _currentFolderId == null;
       return Center(
         key: const Key('libraryEmpty'),
         child: Padding(
@@ -514,13 +523,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('This folder is empty'),
+              Text(atRoot ? 'Library is empty' : 'This folder is empty'),
               const SizedBox(height: 12),
               ElevatedButton(
                 key: const Key('libraryEmptyCreateFolder'),
                 onPressed: _createFolder,
                 child: const Text('Create folder'),
               ),
+              if (atRoot) ...[
+                const SizedBox(height: 8),
+                ElevatedButton(
+                  key: const Key('libraryEmptyImport'),
+                  onPressed: _importFile,
+                  child: const Text('Import'),
+                ),
+              ],
             ],
           ),
         ),

@@ -141,6 +141,10 @@ void main() {
     expect(find.byKey(const Key('libraryEmpty')), findsOneWidget);
     expect(find.byKey(const Key('libraryListError')), findsNothing);
     expect(find.text('This folder is empty'), findsOneWidget);
+    // Empty folder (not root): Create folder in body; Import only via AppBar.
+    expect(find.byKey(const Key('libraryEmptyCreateFolder')), findsOneWidget);
+    expect(find.byKey(const Key('libraryEmptyImport')), findsNothing);
+    expect(find.byKey(const Key('libraryImportButton')), findsOneWidget);
   });
 
   testWidgets('LF-03: Reject empty folder name in UI', (tester) async {
@@ -176,9 +180,73 @@ void main() {
     expect(find.text('Сериалы'), findsOneWidget);
   });
 
-  testWidgets('LD-02: Import CTA absent at library root', (tester) async {
+  testWidgets('LF-11: Empty root shows import and create folder', (tester) async {
     await pumpLibrary(tester);
-    expect(find.byKey(const Key('libraryImportButton')), findsNothing);
+    expect(find.byKey(const Key('libraryEmpty')), findsOneWidget);
+    expect(find.byKey(const Key('libraryEmptyCreateFolder')), findsOneWidget);
+    expect(find.byKey(const Key('libraryEmptyImport')), findsOneWidget);
+    expect(find.byKey(const Key('libraryImportButton')), findsOneWidget);
+    expect(find.byKey(const Key('libraryCreateFolderButton')), findsOneWidget);
+  });
+
+  testWidgets('LF-09: Root lists folders and documents together', (tester) async {
+    final folder = await folders.createFolder(name: 'Сериалы');
+    final doc = await documents.importIntoFolder(
+      folderId: null,
+      fileName: 'episode.srt',
+      bytes: _srtBytes('episode'),
+    );
+
+    await pumpLibrary(tester);
+
+    expect(find.byKey(const Key('libraryList')), findsOneWidget);
+    expect(find.byKey(Key('libraryFolder_${folder.id}')), findsOneWidget);
+    expect(find.byKey(Key('libraryDocument_${doc.id}')), findsOneWidget);
+    expect(find.text('Сериалы'), findsOneWidget);
+    expect(find.text('episode'), findsOneWidget);
+
+    // Folders first, then documents (LF-09 order).
+    final folderY = tester.getTopLeft(find.byKey(Key('libraryFolder_${folder.id}'))).dy;
+    final docY = tester.getTopLeft(find.byKey(Key('libraryDocument_${doc.id}'))).dy;
+    expect(folderY, lessThan(docY));
+  });
+
+  testWidgets('LD-02: Import at library root succeeds', (tester) async {
+    await pumpLibrary(
+      tester,
+      filePicker: () async => PickedLibraryFile(
+        fileName: 'root.srt',
+        bytes: _srtBytes('root cue'),
+      ),
+    );
+    expect(find.byKey(const Key('libraryImportButton')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('libraryImportButton')));
+    await tester.pumpAndSettle();
+
+    final listed = await documents.listVisible(folderId: null);
+    expect(listed, hasLength(1));
+    expect(listed.first.title, 'root');
+    expect(listed.first.folderId, isNull);
+    expect(find.byKey(Key('libraryDocument_${listed.first.id}')), findsOneWidget);
+    expect(find.text('root'), findsOneWidget);
+  });
+
+  testWidgets('LD-30: Open root document opens Reader', (tester) async {
+    final doc = await documents.importIntoFolder(
+      folderId: null,
+      fileName: 'root.srt',
+      bytes: _srtBytes('root cue'),
+    );
+    await pumpLibrary(
+      tester,
+      parseSubtitles: ({required bytes, formatHint}) async =>
+          _okParsed('root cue'),
+    );
+    await tester.tap(find.byKey(Key('libraryDocument_${doc.id}')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('readerScreen')), findsOneWidget);
+    expect(find.text('root cue'), findsOneWidget);
   });
 
   testWidgets('LD-03: Unsupported type shows UI message', (tester) async {
