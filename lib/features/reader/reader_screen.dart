@@ -173,6 +173,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   var _originalInitialScrollIndex = 0;
   var _originalInitialAlignment = 0.0;
 
+  /// Book original paragraph list seed on Show/Hide remount (RS-10/11).
+  /// Reset to 0 on chapter pager (RC-02).
+  var _bookOriginalInitialScrollIndex = 0;
+  var _bookOriginalInitialAlignment = 0.0;
+
   List<rust_parse.CueDto>? _translationCues;
   int? _translationDocumentId;
   List<rust_epub.EpubChapterDto>? _translationChapters;
@@ -216,6 +221,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   final _translationScrollController = ItemScrollController();
   final _originalPositions = ItemPositionsListener.create();
   final _translationPositions = ItemPositionsListener.create();
+
+  /// Book paragraph lists — separate from cue controllers (D1 / RS-10/11).
+  final _bookOriginalScrollController = ItemScrollController();
+  final _bookTranslationScrollController = ItemScrollController();
+  final _bookOriginalPositions = ItemPositionsListener.create();
+  final _bookTranslationPositions = ItemPositionsListener.create();
 
   ParseSubtitlesFn get _parse =>
       widget.parseSubtitles ?? rust_parse.parseSubtitles;
@@ -424,6 +435,55 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final maxTrans = _translationChapters!.length - 1;
     _translationChapterIndex =
         _originalChapterIndex.clamp(0, maxTrans);
+  }
+
+  /// One-shot: jump translation paragraph list to clamped source index (D3).
+  Future<void> _syncBookPanes({
+    int? sourceIndex,
+    double? sourceAlignment,
+    int attempt = 0,
+  }) async {
+    if (_syncing || !_splitEnabled || !_hasTranslationChapters) return;
+
+    final transChapters = _translationChapters!;
+    final tChapter = _translationChapterIndex.clamp(0, transChapters.length - 1);
+    final transParas = transChapters[tChapter].paragraphs;
+    if (transParas.isEmpty) return;
+
+    // Bottom list may not have attached yet after Show/load — retry like cues.
+    if (!_bookTranslationScrollController.isAttached) {
+      if (attempt >= 8) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(
+          _syncBookPanes(
+            sourceIndex: sourceIndex,
+            sourceAlignment: sourceAlignment,
+            attempt: attempt + 1,
+          ),
+        );
+      });
+      return;
+    }
+
+    final anchor =
+        sourceIndex == null ? _topVisible(_bookOriginalPositions) : null;
+    final rawIndex = sourceIndex ?? anchor?.index ?? 0;
+    // RS-22: silent clamp when translation chapter has fewer paragraphs.
+    final targetIndex = rawIndex.clamp(0, transParas.length - 1);
+    final alignment = (sourceAlignment ?? anchor?.itemLeadingEdge ?? 0.0)
+        .clamp(0.0, 1.0);
+
+    _syncing = true;
+    try {
+      if (!_bookTranslationScrollController.isAttached) return;
+      _bookTranslationScrollController.jumpTo(
+        index: targetIndex,
+        alignment: alignment,
+      );
+    } finally {
+      _syncing = false;
+    }
   }
 
   /// Progressive tokenize + chapter cache for EPUB (D12 / RC-08 / RC-09).
@@ -818,6 +878,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
       setState(() {
         _originalChapterIndex = clamped;
+        // RC-02: remount starts at paragraph 0 — clear preserve seed from split.
+        _bookOriginalInitialScrollIndex = 0;
+        _bookOriginalInitialAlignment = 0.0;
         _clearSelection(updateState: false);
         // RC-09: restore from session cache when available; else clear until batch.
         final cached = _chapterTokenCache[clamped];
@@ -1293,15 +1356,55 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _toggleSplit() {
-    // Book mode: chapter indices are session state (no cue-list remount).
+    // Book mode: Show/Hide remounts paragraph list (single ↔ split body).
+    // D2 / RS-10 / RS-11: capture+restore mid-chapter like subtitle cues.
     if (_isBookMode) {
       final enabling = !_splitEnabled;
+      final paragraphs = _currentChapterParagraphs;
+      final anchor = _topVisible(_bookOriginalPositions);
+      final maxIndex = paragraphs.isEmpty ? 0 : paragraphs.length - 1;
+      final restoreIndex = (anchor?.index ?? 0).clamp(0, maxIndex);
+      final restoreAlignment =
+          (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
+
       setState(() {
+        _bookOriginalInitialScrollIndex = restoreIndex;
+        _bookOriginalInitialAlignment = restoreAlignment;
         _splitEnabled = enabling;
-        // RS-19 / D2: Show one-shot aligns translation chapter to original.
+        // RS-19 / D3: Show one-shot aligns translation chapter to original.
         if (enabling && _hasTranslationChapters) {
           _alignTranslationChapterToOriginal();
         }
+      });
+
+      // Remount may attach a frame later; retry like _syncBookPanes / cue restore.
+      void restoreOriginalBookScroll({int attempt = 0}) {
+        if (!mounted || paragraphs.isEmpty) return;
+        if (!_bookOriginalScrollController.isAttached) {
+          if (attempt >= 8) return;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            restoreOriginalBookScroll(attempt: attempt + 1);
+          });
+          return;
+        }
+        _bookOriginalScrollController.jumpTo(
+          index: restoreIndex,
+          alignment: restoreAlignment,
+        );
+        // Show + translation: chapter already aligned; jump paragraphs from
+        // *captured* anchor (do not re-read listener — may still report 0).
+        if (enabling && _hasTranslationChapters) {
+          unawaited(
+            _syncBookPanes(
+              sourceIndex: restoreIndex,
+              sourceAlignment: restoreAlignment,
+            ),
+          );
+        }
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        restoreOriginalBookScroll();
       });
       return;
     }
@@ -1503,10 +1606,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
         final mismatched =
             _originalChapters.isNotEmpty &&
             parsed.chapters.length != _originalChapters.length;
+        // RS-20 / D3: capture original paragraph anchor before attach remount.
+        final bookAnchor = _splitEnabled
+            ? _topVisible(_bookOriginalPositions)
+            : null;
+        final bookParas = _currentChapterParagraphs;
+        final bookMax =
+            bookParas.isEmpty ? 0 : bookParas.length - 1;
+        final bookRestoreIndex =
+            (bookAnchor?.index ?? 0).clamp(0, bookMax);
+        final bookRestoreAlignment =
+            (bookAnchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
         setState(() {
           _translationChapters = parsed.chapters;
           _translationDocumentId = attached.id;
-          // RS-20 / D2: one-shot align when split already on.
+          // RS-20 / D2: one-shot chapter align when split already on.
           if (_splitEnabled) {
             final maxTrans = parsed.chapters.length - 1;
             _translationChapterIndex =
@@ -1515,6 +1629,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
         });
         if (mismatched) {
           _showError(mismatchedEpubChapterCountMessage);
+        }
+        // RS-20 / D3: paragraph one-shot after translation list attaches.
+        if (_splitEnabled) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_splitEnabled) return;
+            unawaited(
+              _syncBookPanes(
+                sourceIndex: bookRestoreIndex,
+                sourceAlignment: bookRestoreAlignment,
+              ),
+            );
+          });
         }
         return;
       }
@@ -1824,14 +1950,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   /// EPUB book pane: paragraph list + bottom chapter pager (RC-01…RC-04).
-  Widget _buildBookPane() {
+  ///
+  /// [split] uses distinct list Keys (like subtitle `readerCueList` vs
+  /// `readerOriginalCueList`) so PageStorage from single-pane does not override
+  /// Show/Hide `initialScrollIndex` (RS-10 / RS-11).
+  Widget _buildBookPane({bool split = false}) {
+    final listKey = split
+        ? const Key('readerOriginalBookParagraphList')
+        : const Key('readerBookParagraphList');
+    final listKeyPrefix =
+        split ? 'readerOriginalBookParagraphList' : 'readerBookParagraphList';
     return _buildBookPaneContent(
       chapters: _originalChapters,
       paneKey: const Key('readerBookPane'),
       emptyKey: const Key('readerBookEmpty'),
       titleKeyPrefix: 'readerBookChapterTitle',
-      listKey: const Key('readerBookParagraphList'),
-      listKeyPrefix: 'readerBookParagraphList',
+      listKey: listKey,
+      listKeyPrefix: listKeyPrefix,
       prevKey: const Key('readerBookChapterPrev'),
       pagerKey: const Key('readerBookChapterPager'),
       nextKey: const Key('readerBookChapterNext'),
@@ -1890,45 +2025,65 @@ class _ReaderScreenState extends State<ReaderScreen> {
             child: NotificationListener<ScrollNotification>(
               onNotification: (n) =>
                   _onScrollNotification(n, fromOriginal: fromOriginal),
-              child: ListView.builder(
-                // Remount per chapter so scroll resets to start (RC-02).
+              child: KeyedSubtree(
+                // Finder / RC-02 remount identity (ValueKey).
                 key: Key('${listKeyPrefix}_$index'),
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                itemCount: displayCues.length,
-                itemBuilder: (context, i) {
-                  if (!interactive) {
+                child: ScrollablePositionedList.builder(
+                  // PageStorageKey isolates single↔split slots (RS-11).
+                  key: PageStorageKey<String>('${listKeyPrefix}_$index'),
+                  itemScrollController: fromOriginal
+                      ? _bookOriginalScrollController
+                      : _bookTranslationScrollController,
+                  itemPositionsListener: fromOriginal
+                      ? _bookOriginalPositions
+                      : _bookTranslationPositions,
+                  // Seed original mid-chapter on Show/Hide remount (RS-10/11).
+                  initialScrollIndex: fromOriginal
+                      ? _bookOriginalInitialScrollIndex.clamp(
+                          0,
+                          displayCues.isEmpty ? 0 : displayCues.length - 1,
+                        )
+                      : 0,
+                  initialAlignment: fromOriginal
+                      ? _bookOriginalInitialAlignment.clamp(0.0, 1.0)
+                      : 0.0,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: displayCues.length,
+                  itemBuilder: (context, i) {
+                    if (!interactive) {
+                      return CueRow(
+                        cue: displayCues[i],
+                        keyPrefix: cueKeyPrefix,
+                        cueListIndex: i,
+                        showTimestamp: false,
+                      );
+                    }
+                    final tokensReady = _tokenizeReady &&
+                        _cueTokensByIndex != null &&
+                        i < _cueTokensByIndex!.length;
+                    final tokens =
+                        tokensReady ? _cueTokensByIndex![i].tokens : null;
+                    final isActive = _hasSelection && _activeCueIndex == i;
                     return CueRow(
                       cue: displayCues[i],
                       keyPrefix: cueKeyPrefix,
                       cueListIndex: i,
+                      tokens: tokens,
+                      selectionStart: isActive ? _selectionStart : null,
+                      selectionEnd: isActive ? _selectionEnd : null,
+                      flashTokenIndex: isActive ? _flashTokenIndex : null,
+                      onTokenTap:
+                          tokensReady && tokens != null && tokens.isNotEmpty
+                              ? (tokenIndex) =>
+                                  _onOriginalTokenTap(i, tokenIndex)
+                              : null,
+                      // D4 / RC-04: no timed cue chrome on paragraphs.
                       showTimestamp: false,
+                      // D11 / RC-07: TextSpan + one gesture; no WidgetSpan-per-word.
+                      lightweightHitTest: true,
                     );
-                  }
-                  final tokensReady = _tokenizeReady &&
-                      _cueTokensByIndex != null &&
-                      i < _cueTokensByIndex!.length;
-                  final tokens =
-                      tokensReady ? _cueTokensByIndex![i].tokens : null;
-                  final isActive = _hasSelection && _activeCueIndex == i;
-                  return CueRow(
-                    cue: displayCues[i],
-                    keyPrefix: cueKeyPrefix,
-                    cueListIndex: i,
-                    tokens: tokens,
-                    selectionStart: isActive ? _selectionStart : null,
-                    selectionEnd: isActive ? _selectionEnd : null,
-                    flashTokenIndex: isActive ? _flashTokenIndex : null,
-                    onTokenTap:
-                        tokensReady && tokens != null && tokens.isNotEmpty
-                            ? (tokenIndex) =>
-                                _onOriginalTokenTap(i, tokenIndex)
-                            : null,
-                    // D4 / RC-04: no timed cue chrome on paragraphs.
-                    showTimestamp: false,
-                    // D11 / RC-07: TextSpan + one gesture; no WidgetSpan-per-word.
-                    lightweightHitTest: true,
-                  );
-                },
+                  },
+                ),
               ),
             ),
           ),
@@ -1984,7 +2139,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       builder: (context, constraints) {
         // Build panes outside ValueListenableBuilder so drag only changes
         // SizedBox heights (D13 / RS-17) — same child widget instances reused.
-        final topPane = _buildBookPane();
+        final topPane = _buildBookPane(split: true);
         final bottomPane = _buildBookBottomPane();
         final dividerColor =
             Theme.of(context).colorScheme.surfaceContainerHighest;

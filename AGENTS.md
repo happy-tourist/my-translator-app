@@ -28,7 +28,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 ### Current vs target
 
-**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **5**). Library open → `loadBytes` → FRB `parseSubtitles` **or** `parseEpub` → cues-first **or** EPUB book-mode **Reader** (`lib/features/reader/`) with optional **split** (subtitle↔subtitle time-nearest **or** EPUB↔EPUB chapter-index sync; hidden linked translation via `translationDocumentId`) and optional **video frame strip** for subtitles only (Dart FFmpeg/canvas, Drift JPEG cache). Web EPUB bytes stored as **base64** in Drift `content`. Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). **Offline Translate** (OPUS-MT EN→RU) on Vocab + Reader sheets via `lib/data/translate/` (native Rust ORT / Web Transformers.js). Rust: `parse/` (+ `parse/epub`) + `tokenize/` + `lemmatize/` + `translate/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI; **no** Rust video API).
+**Сейчас:** product shell Library + Vocabulary; user data в **Drift** (`lib/data/`, `schemaVersion` **5**). Library open → `loadBytes` → FRB `parseSubtitles` **or** `parseEpub` → cues-first **or** EPUB book-mode **Reader** (`lib/features/reader/`) with optional **split** (subtitle↔subtitle time-nearest **or** EPUB↔EPUB one-shot chapter+paragraph align; hidden linked translation via `translationDocumentId`) and optional **video frame strip** for subtitles only (Dart FFmpeg/canvas, Drift JPEG cache). Web EPUB bytes stored as **base64** in Drift `content`. Single-token tap → bottom CTA + add/edit vocab sheet; **morph lemma highlight** on original pane (`tokenize_cues` → `mark_vocab_tokens`, WordNet `lemma_key`). **Offline Translate** (OPUS-MT EN→RU) on Vocab + Reader sheets via `lib/data/translate/` (native Rust ORT / Web Transformers.js). Rust: `parse/` (+ `parse/epub`) + `tokenize/` + `lemmatize/` + `translate/` + thin `api/` (плюс scaffold `process_text` / `add_numbers`, не home UI; **no** Rust video API).
 
 **Ещё target:** phrase-span highlight / phrase Add; Rust cue pairing for index-aligned split — следующие changes.
 
@@ -41,7 +41,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 1. **Чтение субтитров / EPUB** (сейчас) — загрузка SRT / VTT / ASS(SSA) / EPUB; парсинг в Rust; cues или главы/абзацы в Flutter.
 2. **Изучение слов по тапу** (сейчас: single-token sheet; фраза — target) — тап по слову → лемма + «добавить/редактировать в словаре»; выделение фразы — later.
 3. **Подсветка знакомых слов** (сейчас) — записи словаря подсвечиваются в оригинале; матч по morph lemma (`run` / `running` / `ran` = одно слово).
-4. **Разделённый экран** (сейчас MVP) — сверху оригинал, снизу файл перевода; sync по ближайшему `startMs` (субтитры) или общему индексу главы (EPUB).
+4. **Разделённый экран** (сейчас MVP) — сверху оригинал, снизу файл перевода; one-shot по ближайшему `startMs` (субтитры) или глава+абзац (EPUB); после one-shot панели независимы.
 5. **Работа с ИИ** (опционально, позже) — перевод фраз, фразовые глаголы, контекст; разные провайдеры через API.
 6. **Офлайн-перевод** (сейчас) — OPUS-MT EN→RU: кнопка Translate в Vocab / Reader sheets; native Rust ORT, Web Transformers.js, один Dart facade.
 
@@ -53,14 +53,14 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 - Подсветка сохранённых слов с учётом морфологии (сейчас, original pane)
 - Тап → bottom CTA + add/edit vocab sheet (сейчас); Translate на sheet заполняет Translation (сейчас); мгновенная word-card chrome — later
 - Выделение фразы → перевод фразы целиком (target)
-- Split view: оригинал + файл перевода; sync scroll (субтитры: nearest `startMs`; EPUB: chapter index)
+- Split view: оригинал + файл перевода; one-shot sync (субтитры: nearest `startMs`; EPUB: chapter + paragraph index)
 - Опциональный ИИ для перевода/объяснений (later)
 - Локальное хранение (папки/документы библиотеки, словарь, настройки later) — **Drift** в Flutter (`lib/`)
 - Работа офлайн
 
 ### Сейчас в коде
 
-- Flutter: shell **Library** (папки / import SRT·VTT·ASS·EPUB / open→Reader + best-effort linked translation / video for subtitles) + **Vocab** (CRUD + Translate); cues-first **or** EPUB book-mode Reader (chapter pager) with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time or chapter sync + format-gated reading-anchor resume, optional video frame strip (`lib/data/video/`); Drift schema v5 (`surface_key`, video attachment + `DocumentVideoFrames`; Web EPUB base64 in `content`) + repositories; offline translate facade `lib/data/translate/`
+- Flutter: shell **Library** (папки / import SRT·VTT·ASS·EPUB / open→Reader + best-effort linked translation / video for subtitles) + **Vocab** (CRUD + Translate); cues-first **or** EPUB book-mode Reader (chapter pager) with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time or chapter+paragraph one-shot + format-gated reading-anchor resume, optional video frame strip (`lib/data/video/`); Drift schema v5 (`surface_key`, video attachment + `DocumentVideoFrames`; Web EPUB base64 in `content`) + repositories; offline translate facade `lib/data/translate/`
 - Rust: `parse/` (+ `parse/epub`, rbook) + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + `translate/` (native ORT) + FRB `parse_subtitles` / `parse_epub` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` / `init_offline_translate` / `translate_text` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold); Web MT — Transformers.js worker + `web/translate_bridge.js`
 
