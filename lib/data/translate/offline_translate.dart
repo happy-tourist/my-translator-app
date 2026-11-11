@@ -1,5 +1,7 @@
 // Shared offline-translate facade types (design D4.1 / D4.5 / D4.6).
 // Native: FRB ORT. Web: Transformers.js worker via offline_translate_web.
+// Warm-up seam: platform `warmUpOfflineTranslate` / `ensureOfflineTranslateReady`
+// (process-wide shared Future with Translate — design D2 / TO-09).
 
 /// Production / test injectable translate callback.
 typedef OfflineTranslateFn = Future<OfflineTranslateOutcome> Function({

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:my_translator_app/data/database/app_database.dart';
@@ -24,6 +26,7 @@ class AppShell extends StatefulWidget {
     this.dictionaryRepository,
     this.lemmaKeysForSurfaces,
     this.offlineTranslate,
+    this.enableOfflineTranslateWarmUp = true,
   });
 
   final AppDatabase database;
@@ -33,6 +36,10 @@ class AppShell extends StatefulWidget {
   final DictionaryRepository? dictionaryRepository;
   final LemmaKeysForSurfacesFn? lemmaKeysForSurfaces;
   final OfflineTranslateFn? offlineTranslate;
+
+  /// Production default: quiet post-frame warm-up ON (design D1).
+  /// Tests set `false` and/or inject [offlineTranslate] to skip AssetBundle/FRB load.
+  final bool enableOfflineTranslateWarmUp;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -47,6 +54,7 @@ class _AppShellState extends State<AppShell> {
   late final LemmaKeysForSurfacesFn _lemmaKeysForSurfaces;
   /// One facade for Vocab + Reader (design D4.1).
   late final OfflineTranslateFn _offlineTranslate;
+  var _warmUpStarted = false;
 
   @override
   void initState() {
@@ -65,6 +73,19 @@ class _AppShellState extends State<AppShell> {
         ((surfaces) => rust_tokenize.lemmaKeysForSurfaces(surfaces: surfaces));
     _offlineTranslate =
         widget.offlineTranslate ?? createPlatformOfflineTranslate();
+
+    // Design D1: first post-frame of AppShell (not DB spinner). Escape hatch:
+    // disabled flag and/or injectable translate → skip production warm-up.
+    final shouldWarmUp = widget.enableOfflineTranslateWarmUp &&
+        widget.offlineTranslate == null;
+    if (shouldWarmUp) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _warmUpStarted) return;
+        _warmUpStarted = true;
+        // Quiet (D6): [warmUpOfflineTranslate] swallows; no SnackBar here.
+        unawaited(warmUpOfflineTranslate());
+      });
+    }
   }
 
   @override

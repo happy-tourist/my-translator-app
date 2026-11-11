@@ -2019,6 +2019,121 @@ void main() {
     expect(btn.onPressed, isNull);
   });
 
+  // TO-10: mid-init wait on Add-sheet — spinner, then gloss (shared ensure in flight).
+  testWidgets('TO-10: Add-sheet Translate mid-init shows loading then gloss', (
+    tester,
+  ) async {
+    final completer = Completer<OfflineTranslateOutcome>();
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) =>
+        completer.future;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openAddSheet(tester);
+
+    await tester.tap(find.byKey(const Key('readerAddVocabTranslate')));
+    await tester.pump();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerAddVocabTranslate')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const Key('readerAddVocabTranslate')),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    completer.complete(const OfflineTranslateOk(primaryGloss: 'привет'));
+    await tester.pumpAndSettle();
+
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('readerAddVocabTranslation')),
+    );
+    expect(translation.controller!.text, 'привет');
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerAddVocabTranslate')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
+  });
+
+  // TO-10: mid-init wait on Add-sheet — spinner, then typed err (no fake gloss).
+  testWidgets('TO-10: Add-sheet Translate mid-init shows loading then err', (
+    tester,
+  ) async {
+    final completer = Completer<OfflineTranslateOutcome>();
+    pumpCues = [
+      CueDto(
+        index: 0,
+        startMs: BigInt.from(0),
+        endMs: BigInt.from(1000),
+        textLines: ['hello'],
+      ),
+    ];
+    pumpTokenize = _tokenizeFromTexts;
+    pumpOfflineTranslate = ({
+      required String text,
+      String sourceLang = 'en',
+      String targetLang = 'ru',
+    }) =>
+        completer.future;
+    await pumpReader(tester);
+    await tester.pumpAndSettle();
+    await openAddSheet(tester);
+
+    await tester.enterText(
+      find.byKey(const Key('readerAddVocabTranslation')),
+      'keep-me',
+    );
+    await tester.tap(find.byKey(const Key('readerAddVocabTranslate')));
+    await tester.pump();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('readerAddVocabTranslate')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+
+    completer.complete(
+      const OfflineTranslateErr(
+        kind: OfflineTranslateErrorKind.inferenceFailed,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('readerAddVocabTranslateErrorSnack')),
+      findsOneWidget,
+    );
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('readerAddVocabTranslation')),
+    );
+    expect(translation.controller!.text, 'keep-me');
+  });
+
   testWidgets('RT-20: Translate error on Add-sheet', (tester) async {
     pumpCues = [
       CueDto(

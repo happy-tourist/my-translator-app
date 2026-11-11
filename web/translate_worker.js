@@ -7,6 +7,11 @@
  *   → { id, ok: true, primaryGloss }
  *   → { id, ok: false, kind: 'emptyQuery'|'unsupportedLanguagePair'|
  *                        'engineUnavailable'|'inferenceFailed'|'internal' }
+ *   { id, op: 'warmup' }
+ *   → { id, ok: true } | { id, ok: false, kind }
+ *
+ * Warmup and translate share one module-level `translatorPromise` so a race
+ * warmup∥translate never creates two Transformers.js pipelines.
  */
 import { pipeline, env } from './transformers/transformers.min.js';
 
@@ -35,6 +40,7 @@ if (env.backends?.onnx?.wasm) {
   ).href;
 }
 
+/** Single in-flight / cached pipeline for warmup + translate (design D2 / D5). */
 let translatorPromise = null;
 
 function normalizeLang(code) {
@@ -83,6 +89,19 @@ self.onmessage = async (event) => {
   const data = event.data ?? {};
   const id = data.id;
   const op = data.op;
+
+  if (op === 'warmup') {
+    try {
+      await getTranslator();
+      reply(id, { ok: true });
+    } catch (err) {
+      reply(id, {
+        ok: false,
+        kind: err?.kind ?? ERROR.engineUnavailable,
+      });
+    }
+    return;
+  }
 
   if (op !== 'translate') {
     reply(id, { ok: false, kind: ERROR.internal });

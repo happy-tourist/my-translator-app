@@ -306,7 +306,10 @@ void main() {
     expect(find.text(kOfflineTranslateDisclaimer), findsOneWidget);
   });
 
-  testWidgets('Vocab Translate shows loading then re-enables', (tester) async {
+  // TO-10: mid-init wait — loading on Translate, then gloss (shared ensure in flight).
+  testWidgets('TO-10: Vocab Translate mid-init shows loading then gloss', (
+    tester,
+  ) async {
     final completer = Completer<OfflineTranslateOutcome>();
     await pumpVocab(
       tester,
@@ -327,7 +330,13 @@ void main() {
       find.byKey(const Key('vocabTranslateButton')),
     );
     expect(btn.onPressed, isNull);
-    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('vocabTranslateButton')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
 
     // Add must not be blocked by Translate loading.
     final add = tester.widget<ElevatedButton>(
@@ -338,9 +347,67 @@ void main() {
     completer.complete(const OfflineTranslateOk(primaryGloss: 'привет'));
     await tester.pumpAndSettle();
 
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('vocabTranslationField')),
+    );
+    expect(translation.controller!.text, 'привет');
+
     btn = tester.widget<OutlinedButton>(
       find.byKey(const Key('vocabTranslateButton')),
     );
     expect(btn.onPressed, isNotNull);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('vocabTranslateButton')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
+  });
+
+  // TO-10: mid-init wait — loading on Translate, then typed err (no fake gloss).
+  testWidgets('TO-10: Vocab Translate mid-init shows loading then err', (
+    tester,
+  ) async {
+    final completer = Completer<OfflineTranslateOutcome>();
+    await pumpVocab(
+      tester,
+      offlineTranslate: ({
+        required String text,
+        String sourceLang = 'en',
+        String targetLang = 'ru',
+      }) =>
+          completer.future,
+    );
+
+    await tester.enterText(find.byKey(const Key('vocabLemmaField')), 'hello');
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('vocabTranslationField')),
+      'keep-me',
+    );
+    await tester.tap(find.byKey(const Key('vocabTranslateButton')));
+    await tester.pump();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('vocabTranslateButton')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+
+    completer.complete(
+      const OfflineTranslateErr(
+        kind: OfflineTranslateErrorKind.engineUnavailable,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('vocabTranslateErrorSnack')), findsOneWidget);
+    final translation = tester.widget<TextField>(
+      find.byKey(const Key('vocabTranslationField')),
+    );
+    expect(translation.controller!.text, 'keep-me');
   });
 }
