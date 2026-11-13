@@ -415,6 +415,70 @@ void main() {
     expect(find.byKey(const Key('readerTranslationLoad')), findsNothing);
   });
 
+  testWidgets(
+    'RS-24 / LD-31: Library open restores saved translation anchor independently',
+    (tester) async {
+      final folder = await folders.createFolder(name: 'S01');
+      final original = await documents.importIntoFolder(
+        folderId: folder.id,
+        fileName: 'original.srt',
+        bytes: _srtBytes('original cue'),
+      );
+      final translation = await documents.attachTranslation(
+        originalDocumentId: original.id,
+        fileName: 'ru.srt',
+        bytes: _srtBytes('translation cue'),
+      );
+      // Saved from a prior session — each pane keeps its own position
+      // (D9: never used to sync one pane to the other).
+      await documents.saveReadingAnchor(
+        documentId: original.id,
+        startMs: 1000,
+        alignment: 0.0,
+      );
+      await documents.saveReadingAnchor(
+        documentId: translation.id,
+        startMs: 1000,
+        alignment: 0.5,
+      );
+
+      await pumpLibrary(
+        tester,
+        parseSubtitles: ({required bytes, formatHint}) async {
+          final text = utf8.decode(bytes);
+          final cueText = text.contains('translation cue')
+              ? 'translation cue'
+              : 'original cue';
+          return ParsedSubtitles(
+            format: 'srt',
+            cues: [
+              CueDto(
+                index: 0,
+                startMs: BigInt.from(1000),
+                endMs: BigInt.from(2000),
+                textLines: [cueText],
+              ),
+            ],
+          );
+        },
+      );
+      await tester.tap(find.byKey(Key('libraryFolder_${folder.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('libraryDocument_${original.id}')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('readerScreen')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      // The translation pane loaded its own saved anchor from Drift
+      // (LD-31), independent of the original's anchor/load flow.
+      expect(find.byKey(const Key('readerTranslationCueList')), findsOneWidget);
+      expect(find.text('translation cue'), findsOneWidget);
+    },
+  );
+
   testWidgets('LD-24: Import valid EPUB file into folder', (tester) async {
     final folder = await folders.createFolder(name: 'S01');
     await pumpLibrary(

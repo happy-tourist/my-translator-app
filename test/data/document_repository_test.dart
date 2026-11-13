@@ -343,6 +343,65 @@ void main() {
     expect(reloaded.lastReadAlignment, closeTo(0.25, 1e-9));
   });
 
+  test(
+    'LD-31: Translation reading anchor persists on its own document row, '
+    'independent of the original\'s anchor',
+    () async {
+      final folder = await folders.createFolder(name: 'S01');
+      final original = await documents.importIntoFolder(
+        folderId: folder.id,
+        fileName: 'original.srt',
+        bytes: _srtBytes('original'),
+      );
+      final translation = await documents.attachTranslation(
+        originalDocumentId: original.id,
+        fileName: 'ru.srt',
+        bytes: _srtBytes('перевод'),
+      );
+
+      expect(await documents.loadReadingAnchor(original.id), isNull);
+      expect(await documents.loadReadingAnchor(translation.id), isNull);
+
+      // D11 / LD-31: no schema change — the translation anchor is stored on
+      // the translation's own (hidden) Documents row via the same generic
+      // save/load methods used for the original (RS-24).
+      await documents.saveReadingAnchor(
+        documentId: original.id,
+        startMs: 4500,
+        alignment: 0.25,
+      );
+      await documents.saveReadingAnchor(
+        documentId: translation.id,
+        startMs: 9100,
+        alignment: 0.75,
+      );
+
+      final originalAnchor = await documents.loadReadingAnchor(original.id);
+      final translationAnchor = await documents.loadReadingAnchor(
+        translation.id,
+      );
+      expect(originalAnchor, isNotNull);
+      expect(originalAnchor!.startMs, 4500);
+      expect(originalAnchor.alignment, closeTo(0.25, 1e-9));
+      expect(translationAnchor, isNotNull);
+      expect(translationAnchor!.startMs, 9100);
+      expect(translationAnchor.alignment, closeTo(0.75, 1e-9));
+
+      // Updating one does not disturb the other (LD-17 original untouched).
+      await documents.saveReadingAnchor(
+        documentId: translation.id,
+        startMs: 12000,
+        alignment: 0.1,
+      );
+      final originalAfter = await documents.loadReadingAnchor(original.id);
+      expect(originalAfter!.startMs, 4500);
+      final translationAfter = await documents.loadReadingAnchor(
+        translation.id,
+      );
+      expect(translationAfter!.startMs, 12000);
+    },
+  );
+
   test('LD-20: Persist video durable link and frame cache', () async {
     final folder = await folders.createFolder(name: 'S01');
     final original = await documents.importIntoFolder(

@@ -37,8 +37,9 @@ class AppShell extends StatefulWidget {
   final LemmaKeysForSurfacesFn? lemmaKeysForSurfaces;
   final OfflineTranslateFn? offlineTranslate;
 
-  /// Production default: quiet post-frame warm-up ON (design D1).
-  /// Tests set `false` and/or inject [offlineTranslate] to skip AssetBundle/FRB load.
+  /// Production default: fullscreen warm-up gate ON (design D1).
+  /// Tests set `false` and/or inject [offlineTranslate] to skip AssetBundle/FRB load
+  /// and the gate entirely (shell is interactive immediately).
   final bool enableOfflineTranslateWarmUp;
 
   @override
@@ -54,7 +55,9 @@ class _AppShellState extends State<AppShell> {
   late final LemmaKeysForSurfacesFn _lemmaKeysForSurfaces;
   /// One facade for Vocab + Reader (design D4.1).
   late final OfflineTranslateFn _offlineTranslate;
-  var _warmUpStarted = false;
+  /// Fullscreen gate state (design D1 / TO-09 / TO-13): product shell
+  /// (Library/Vocab) is not built/interactive until this flips true.
+  var _gateDone = false;
 
   @override
   void initState() {
@@ -74,22 +77,37 @@ class _AppShellState extends State<AppShell> {
     _offlineTranslate =
         widget.offlineTranslate ?? createPlatformOfflineTranslate();
 
-    // Design D1: first post-frame of AppShell (not DB spinner). Escape hatch:
-    // disabled flag and/or injectable translate → skip production warm-up.
+    // Design D1 / TO-09: after Drift open (AppShell build), block the product
+    // shell behind a fullscreen loading gate until ensure/warm-up settles.
+    // Escape hatch: disabled flag and/or injectable translate → skip the gate
+    // entirely so tests never wait on AssetBundle/FRB load.
     final shouldWarmUp = widget.enableOfflineTranslateWarmUp &&
         widget.offlineTranslate == null;
     if (shouldWarmUp) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _warmUpStarted) return;
-        _warmUpStarted = true;
-        // Quiet (D6): [warmUpOfflineTranslate] swallows; no SnackBar here.
-        unawaited(warmUpOfflineTranslate());
-      });
+      unawaited(_runWarmUpGate());
+    } else {
+      _gateDone = true;
     }
+  }
+
+  Future<void> _runWarmUpGate() async {
+    // Quiet (D6 / TO-13): [warmUpOfflineTranslate] swallows init errors — the
+    // gate is dismissed either way (success or fail), no SnackBar from here.
+    await warmUpOfflineTranslate();
+    if (!mounted) return;
+    setState(() => _gateDone = true);
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_gateDone) {
+      // Fullscreen loading gate (design D1 / TO-09): Library/Vocab and the
+      // bottom nav are not built — product shell is not interactive yet.
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     final pages = <Widget>[
       LibraryScreen(
         folderRepository: _folders,

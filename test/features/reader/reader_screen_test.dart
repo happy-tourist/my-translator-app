@@ -225,6 +225,7 @@ void main() {
   List<CueDto>? pumpTranslationCues;
   int? pumpTranslationDocumentId;
   ReadingAnchor? pumpInitialReadingAnchor;
+  ReadingAnchor? pumpInitialTranslationReadingAnchor;
   VideoAttachment? pumpInitialVideoAttachment;
   ParseSubtitlesFn? pumpParse;
   TokenizeCuesFn? pumpTokenize;
@@ -247,6 +248,7 @@ void main() {
     pumpTranslationCues = null;
     pumpTranslationDocumentId = null;
     pumpInitialReadingAnchor = null;
+    pumpInitialTranslationReadingAnchor = null;
     pumpInitialVideoAttachment = null;
     pumpParse = null;
     pumpTokenize = _emptyTokenize;
@@ -288,6 +290,7 @@ void main() {
           translationCues: pumpTranslationCues,
           translationDocumentId: pumpTranslationDocumentId,
           initialReadingAnchor: pumpInitialReadingAnchor,
+          initialTranslationReadingAnchor: pumpInitialTranslationReadingAnchor,
           initialVideoAttachment: pumpInitialVideoAttachment,
           parseSubtitles: pumpParse,
           tokenizeCues: pumpTokenize,
@@ -533,32 +536,10 @@ void main() {
     expect(reloaded!.translationDocumentId, isNotNull);
   });
 
-  testWidgets('RS-05: Sync after load by nearest start time', (tester) async {
+  testWidgets('RS-23: Bottom pane text-only under divider', (tester) async {
     final original = await seedOriginal();
     pumpOriginalDocumentId = original.id;
-    // Top stays on cue 0 (start 0). Translation nearest to 0 is index 0
-    // (start 100), not the later cues — verify that cue text appears after load.
-    final translationCues = [
-      CueDto(
-        index: 0,
-        startMs: BigInt.from(100),
-        endMs: BigInt.from(1100),
-        textLines: ['Near anchor'],
-      ),
-      CueDto(
-        index: 1,
-        startMs: BigInt.from(8000),
-        endMs: BigInt.from(9000),
-        textLines: ['Far cue'],
-      ),
-      CueDto(
-        index: 2,
-        startMs: BigInt.from(16000),
-        endMs: BigInt.from(17000),
-        textLines: ['Farther cue'],
-      ),
-    ];
-    pumpCues = _sampleCues(count: 20);
+    final translationCues = _sampleCues(prefix: 'Tr', count: 2);
     pumpPicker = () async => PickedTranslationFile(
       fileName: 'ru.srt',
       bytes: _srtBytes('перевод'),
@@ -569,40 +550,102 @@ void main() {
     await pumpReader(tester);
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
     await tester.pumpAndSettle();
-
-    // Scroll original so cue 10 (start 15000) is the anchor, then load.
-    await tester.drag(
-      find.byKey(const Key('readerOriginalCueList')),
-      const Offset(0, -2000),
-    );
-    await tester.pumpAndSettle();
-
-    final topVisible = tester
-        .widgetList<Text>(find.descendant(
-          of: find.byKey(const Key('readerOriginalCueList')),
-          matching: find.byType(Text),
-        ))
-        .map((t) => t.data)
-        .whereType<String>()
-        .where((s) => s.startsWith('Cue line '))
-        .toList();
-    expect(topVisible, isNotEmpty);
-    final anchorLine = topVisible.first;
-    final anchorIndex = int.parse(anchorLine.replaceFirst('Cue line ', ''));
-    final expected = nearestCueIndex(
-      translationCues,
-      pumpCues[anchorIndex].startMs,
-    );
-
     await tester.tap(find.byKey(const Key('readerTranslationLoad')));
     await tester.pumpAndSettle();
 
+    // D12 / RS-07: no delete chrome inside the bottom pane itself.
     expect(
-      find.byKey(Key('readerTranslationCue_$expected')),
+      find.descendant(
+        of: find.byKey(const Key('readerTranslationCueList')),
+        matching: find.byKey(const Key('readerTranslationDelete')),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byKey(const Key('readerTranslationDelete')),
+      ),
       findsOneWidget,
     );
-    expect(find.text(translationCues[expected].textLines.first), findsOneWidget);
+
+    // D12 / RS-23: first translation row sits flush under the divider — no
+    // extra title/pager/delete-bar chrome pushing it down.
+    final dividerBottom =
+        tester.getRect(find.byKey(const Key('readerSplitDivider'))).bottom;
+    final firstRowTop = tester.getTopLeft(find.text('Tr 0')).dy;
+    // No delete bar (48dp) / title / pager pushing the row down — only the
+    // row's own built-in padding remains.
+    expect(firstRowTop - dividerBottom, lessThan(40));
   });
+
+  testWidgets(
+    'RS-05: Load translation shows cues without aligning to original anchor',
+    (tester) async {
+      final original = await seedOriginal();
+      pumpOriginalDocumentId = original.id;
+      final translationCues = [
+        CueDto(
+          index: 0,
+          startMs: BigInt.from(100),
+          endMs: BigInt.from(1100),
+          textLines: ['Near anchor'],
+        ),
+        CueDto(
+          index: 1,
+          startMs: BigInt.from(8000),
+          endMs: BigInt.from(9000),
+          textLines: ['Far cue'],
+        ),
+        CueDto(
+          index: 2,
+          startMs: BigInt.from(16000),
+          endMs: BigInt.from(17000),
+          textLines: ['Farther cue'],
+        ),
+      ];
+      pumpCues = _sampleCues(count: 20);
+      pumpPicker = () async => PickedTranslationFile(
+        fileName: 'ru.srt',
+        bytes: _srtBytes('перевод'),
+      );
+      pumpParse = ({required bytes, formatHint}) async =>
+          _parsedFromCues(translationCues);
+
+      await pumpReader(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      // Scroll original far from the top before loading (D9: must not
+      // influence where the bottom pane starts).
+      await tester.drag(
+        find.byKey(const Key('readerOriginalCueList')),
+        const Offset(0, -2000),
+      );
+      await tester.pumpAndSettle();
+      final topVisible = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerOriginalCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Cue line '))
+          .toList();
+      expect(topVisible, isNotEmpty);
+      final anchorIndex =
+          int.parse(topVisible.first.replaceFirst('Cue line ', ''));
+      expect(anchorIndex, greaterThan(0));
+
+      await tester.tap(find.byKey(const Key('readerTranslationLoad')));
+      await tester.pumpAndSettle();
+
+      // D9 / RS-05: bottom shows its own default (first) position, not the
+      // cue nearest to the original's current anchor.
+      expect(find.byKey(const Key('readerTranslationCue_0')), findsOneWidget);
+      expect(find.text('Near anchor'), findsOneWidget);
+    },
+  );
 
   testWidgets('RS-06: Scroll settle does not sync other pane', (tester) async {
     final originalCues = _sampleCues(count: 40, prefix: 'Orig');
@@ -685,15 +728,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Tr 0'), findsOneWidget);
 
-    // Delete is in bottom-pane top chrome, not AppBar (RS-07 / D8).
+    // D12 / RS-07: Delete lives in the AppBar next to split, not the bottom.
     expect(
       find.descendant(
         of: find.byType(AppBar),
         matching: find.byKey(const Key('readerTranslationDelete')),
       ),
-      findsNothing,
+      findsOneWidget,
     );
-    expect(find.byKey(const Key('readerTranslationDelete')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('readerTranslationDelete')));
     await tester.pumpAndSettle();
@@ -835,7 +877,7 @@ void main() {
   });
 
   testWidgets(
-    'RS-18: Show split one-shot syncs translation pane',
+    'RS-18: Show split does not align translation pane to original anchor',
     (tester) async {
       final originalCues = _sampleCues(count: 40, prefix: 'Orig');
       final translationCues = _sampleCues(
@@ -867,56 +909,23 @@ void main() {
       final anchorIndex =
           int.parse(beforeVisible.first.replaceFirst('Orig ', ''));
       expect(anchorIndex, greaterThan(0));
-      final expected = nearestCueIndex(
-        translationCues,
-        originalCues[anchorIndex].startMs,
-      );
-      expect(expected, greaterThan(0));
 
       await tester.tap(find.byKey(const Key('readerSplitToggle')));
       await tester.pumpAndSettle();
 
+      // D9 / RS-18: bottom shows its own default (first) position — no
+      // one-shot align to the original's (scrolled-far) anchor.
       expect(find.byKey(const Key('readerTranslationCueList')), findsOneWidget);
-      expect(
-        find.byKey(Key('readerTranslationCue_$expected')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('readerTranslationCue_0')), findsOneWidget);
+      expect(find.text('Tr 0'), findsOneWidget);
 
-      final trVisible = tester
-          .widgetList<Text>(find.descendant(
-            of: find.byKey(const Key('readerTranslationCueList')),
-            matching: find.byType(Text),
-          ))
-          .map((t) => t.data)
-          .whereType<String>()
-          .where((s) => s.startsWith('Tr '))
-          .toList();
-      expect(trVisible, isNotEmpty);
-      final trIndex = int.parse(trVisible.first.replaceFirst('Tr ', ''));
-      // Must not stay at cue 0 when original was scrolled far.
-      expect(trIndex, greaterThan(0));
-      expect((trIndex - expected).abs(), lessThanOrEqualTo(2));
-
-      // Subsequent scroll must not re-sync the other pane (RS-18 / RS-06).
+      // Subsequent scroll must not sync the other pane (RS-18 / RS-06).
       await tester.drag(
         find.byKey(const Key('readerOriginalCueList')),
         const Offset(0, -2000),
       );
       await tester.pumpAndSettle();
-      final trAfterScroll = tester
-          .widgetList<Text>(find.descendant(
-            of: find.byKey(const Key('readerTranslationCueList')),
-            matching: find.byType(Text),
-          ))
-          .map((t) => t.data)
-          .whereType<String>()
-          .where((s) => s.startsWith('Tr '))
-          .toList();
-      expect(trAfterScroll, isNotEmpty);
-      expect(
-        int.parse(trAfterScroll.first.replaceFirst('Tr ', '')),
-        trIndex,
-      );
+      expect(find.text('Tr 0'), findsOneWidget);
     },
   );
 
@@ -969,6 +978,172 @@ void main() {
     expect(afterIndex, greaterThan(0));
     expect((afterIndex - anchorIndex).abs(), lessThanOrEqualTo(2));
   });
+
+  testWidgets(
+    'RS-24: Hide split persists bottom anchor; Show restores it (own, no sync)',
+    (tester) async {
+      final original = await seedOriginal();
+      final translation = await documents.attachTranslation(
+        originalDocumentId: original.id,
+        fileName: 'ru.srt',
+        bytes: _srtBytes('перевод'),
+      );
+      pumpOriginalDocumentId = original.id;
+      pumpTranslationDocumentId = translation.id;
+      pumpTranslationCues = _sampleCues(
+        prefix: 'Tr',
+        count: 40,
+        startStepMs: 1000,
+      );
+
+      await pumpReader(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      await tester.drag(
+        find.byKey(const Key('readerTranslationCueList')),
+        const Offset(0, -2500),
+      );
+      await tester.pumpAndSettle();
+
+      final trVisible = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerTranslationCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Tr '))
+          .toList();
+      expect(trVisible, isNotEmpty);
+      final trIndex = int.parse(trVisible.first.replaceFirst('Tr ', ''));
+      expect(trIndex, greaterThan(0));
+
+      // Hide — bottom persists its own anchor to Drift (RS-24 / LD-31), even
+      // though the pane is about to be disposed.
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      final saved = await documents.loadReadingAnchor(translation.id);
+      expect(saved, isNotNull);
+      expect(saved!.startMs, pumpTranslationCues![trIndex].startMs.toInt());
+
+      // Show again — bottom restores its own position; original (top) is
+      // untouched by this (independent panes, D9).
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      final trAfter = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerTranslationCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Tr '))
+          .toList();
+      expect(trAfter, isNotEmpty);
+      final trIndexAfter = int.parse(trAfter.first.replaceFirst('Tr ', ''));
+      expect((trIndexAfter - trIndex).abs(), lessThanOrEqualTo(2));
+    },
+  );
+
+  testWidgets(
+    'RS-24 / LD-31: Reopen restores bottom from persisted translation anchor',
+    (tester) async {
+      final translationCues = _sampleCues(
+        prefix: 'Tr',
+        count: 40,
+        startStepMs: 1000,
+      );
+      pumpCues = _sampleCues(count: 40, startStepMs: 1000);
+      pumpTranslationCues = translationCues;
+      pumpTranslationDocumentId = 99;
+      // Saved anchor from a prior session — not the start of the list, and
+      // not necessarily an exact cue start (mapped via nearest startMs).
+      pumpInitialTranslationReadingAnchor = const ReadingAnchor(
+        startMs: 15400,
+        alignment: 0.0,
+      );
+      final expectedIndex = nearestCueIndex(
+        translationCues,
+        BigInt.from(15400),
+      );
+      expect(expectedIndex, greaterThan(0));
+
+      await pumpReader(tester);
+      // Original resumes at its own (unrelated) default — no translation
+      // sync on open (RS-12 / D9).
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(Key('readerTranslationCue_$expectedIndex')),
+        findsOneWidget,
+      );
+      final trVisible = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerTranslationCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Tr '))
+          .toList();
+      expect(trVisible, isNotEmpty);
+      final trIndex = int.parse(trVisible.first.replaceFirst('Tr ', ''));
+      expect((trIndex - expectedIndex).abs(), lessThanOrEqualTo(2));
+    },
+  );
+
+  testWidgets(
+    'RS-24: Pop persists bottom anchor even without a prior Hide',
+    (tester) async {
+      final original = await seedOriginal();
+      final translation = await documents.attachTranslation(
+        originalDocumentId: original.id,
+        fileName: 'ru.srt',
+        bytes: _srtBytes('перевод'),
+      );
+      pumpOriginalDocumentId = original.id;
+      pumpTranslationDocumentId = translation.id;
+      pumpTranslationCues = _sampleCues(
+        prefix: 'Tr',
+        count: 40,
+        startStepMs: 1000,
+      );
+
+      await pumpReader(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await tester.pumpAndSettle();
+
+      await tester.drag(
+        find.byKey(const Key('readerTranslationCueList')),
+        const Offset(0, -2500),
+      );
+      await tester.pumpAndSettle();
+
+      final trVisible = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byKey(const Key('readerTranslationCueList')),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.startsWith('Tr '))
+          .toList();
+      final trIndex = int.parse(trVisible.first.replaceFirst('Tr ', ''));
+      expect(trIndex, greaterThan(0));
+
+      // Pop (back button) while split is on — no explicit Hide first.
+      await tester.tap(find.byKey(const Key('readerBack')));
+      await tester.pumpAndSettle();
+
+      final saved = await documents.loadReadingAnchor(translation.id);
+      expect(saved, isNotNull);
+      expect(saved!.startMs, pumpTranslationCues![trIndex].startMs.toInt());
+    },
+  );
 
   testWidgets('RS-12: Reopen resumes at saved original anchor', (tester) async {
     pumpCues = _sampleCues(count: 40, startStepMs: 1000);
@@ -1027,24 +1202,22 @@ void main() {
       expect(find.byKey(const Key('readerTranslationEmpty')), findsOneWidget);
       expect(find.text('Saved translation could not be shown'), findsOneWidget);
       expect(find.byKey(const Key('readerTranslationLoad')), findsNothing);
+      // D12 / RS-07: Delete lives in the AppBar next to split (one key,
+      // stuck-link or not), not the bottom pane's own chrome.
       expect(
         find.descendant(
           of: find.byType(AppBar),
-          matching: find.byKey(const Key('readerTranslationDeleteEmpty')),
+          matching: find.byKey(const Key('readerTranslationDelete')),
         ),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const Key('readerTranslationDeleteEmpty')),
         findsOneWidget,
       );
 
-      await tester.tap(find.byKey(const Key('readerTranslationDeleteEmpty')));
+      await tester.tap(find.byKey(const Key('readerTranslationDelete')));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('readerTranslationLoad')), findsOneWidget);
       expect(
-        find.byKey(const Key('readerTranslationDeleteEmpty')),
+        find.byKey(const Key('readerTranslationDelete')),
         findsNothing,
       );
       expect(await documents.getById(translation.id), isNull);

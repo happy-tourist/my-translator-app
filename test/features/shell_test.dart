@@ -57,16 +57,14 @@ void main() {
     expect(find.byType(LibraryScreen), findsNothing);
   });
 
-  // TO-09: quiet warm-up after first AppShell post-frame (design D1).
-  testWidgets('TO-09: AppShell post-frame seam starts offline translate warm-up',
+  // TO-09: fullscreen gate blocks product shell until warm-up ready (design D1).
+  testWidgets(
+      'TO-09: fullscreen gate blocks shell until ensure/warm-up resolves',
       (tester) async {
     final gate = Completer<void>();
     var ready = false;
-    var warmUpSawProductShell = false;
     debugIsOfflineTranslateReadyOverride = () async => ready;
     debugLoadAndInitOverride = (bundle) async {
-      // Warm-up runs after shell paint: Library is already mounted.
-      warmUpSawProductShell = find.byType(LibraryScreen).evaluate().isNotEmpty;
       await gate.future;
       ready = true;
     };
@@ -82,18 +80,25 @@ void main() {
           dictionaryRepository: DictionaryRepository(db),
           lemmaKeysForSurfaces: (surfaces) async =>
               surfaces.map((s) => s.trim().toLowerCase()).toList(),
-          // Production default: warm-up ON; fake ensure via debug overrides.
+          // Production default: fullscreen gate ON; fake ensure via debug overrides.
         ),
       ),
     );
-    // pumpWidget draws the first frame and runs post-frame callbacks.
-    expect(find.byType(LibraryScreen), findsOneWidget);
+    // pumpWidget draws the first frame; gate still in-flight → shell must not
+    // be built/interactive yet (TO-09).
+    expect(find.byType(LibraryScreen), findsNothing);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(debugOfflineTranslateInitStarts, 1);
-    expect(warmUpSawProductShell, isTrue);
     expect(find.byType(SnackBar), findsNothing);
 
     gate.complete();
     await tester.pump();
+    await tester.pump();
+
+    // Gate dismissed on success → product shell visible.
+    expect(find.byType(LibraryScreen), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
 
     // TO-12 in-process: further warm-up/ensure after ready is a no-op.
     await warmUpOfflineTranslate(bundle: _EmptyBundle());
@@ -101,7 +106,43 @@ void main() {
     expect(find.byType(SnackBar), findsNothing);
   });
 
-  testWidgets('TO-09 escape hatch: disabled warm-up does not start ensure',
+  // TO-13: ensure/warm-up failure still dismisses the fullscreen gate.
+  testWidgets(
+      'TO-13: warm-up failure dismisses the fullscreen gate without SnackBar',
+      (tester) async {
+    debugIsOfflineTranslateReadyOverride = () async => false;
+    debugLoadAndInitOverride = (bundle) async {
+      throw FlutterError('offline translate asset empty: fake');
+    };
+
+    final store = MemoryDocumentContentStore();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppShell(
+          database: db,
+          contentStore: store,
+          folderRepository: FolderRepository(db, contentStore: store),
+          documentRepository: DocumentRepository(db, contentStore: store),
+          dictionaryRepository: DictionaryRepository(db),
+          lemmaKeysForSurfaces: (surfaces) async =>
+              surfaces.map((s) => s.trim().toLowerCase()).toList(),
+          // Production default: fullscreen gate ON; fake failing ensure.
+        ),
+      ),
+    );
+    expect(find.byType(LibraryScreen), findsNothing);
+
+    // Let the failing ensure/warm-up settle (caught quietly by warmUp).
+    await tester.pump();
+    await tester.pump();
+
+    // Fail → gate dismissed, product shell available, no mandatory SnackBar.
+    expect(find.byType(LibraryScreen), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+  });
+
+  testWidgets(
+      'TO-09 escape hatch: disabled warm-up skips the gate entirely',
       (tester) async {
     debugIsOfflineTranslateReadyOverride = () async => false;
     debugLoadAndInitOverride = (bundle) async {};
@@ -122,6 +163,8 @@ void main() {
       ),
     );
     await tester.pump();
+    // Escape hatch: gate skipped → shell interactive immediately, no ensure.
+    expect(find.byType(LibraryScreen), findsOneWidget);
     expect(debugOfflineTranslateInitStarts, 0);
   });
 }

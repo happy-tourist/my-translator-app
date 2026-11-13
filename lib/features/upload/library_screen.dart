@@ -345,6 +345,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
 
     final initialReadingAnchor = await _loadReadingAnchorBestEffort(doc.id);
+    // RS-24 / LD-31: bottom pane's own saved position — never used to sync
+    // to the original (D9).
+    final initialTranslationReadingAnchor = translationDocumentId == null
+        ? null
+        : await _loadReadingAnchorBestEffort(translationDocumentId);
     final initialVideoAttachment = await _loadVideoAttachmentBestEffort(doc.id);
 
     if (!mounted) return;
@@ -361,6 +366,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           translationCues: translationCues,
           translationDocumentId: translationDocumentId,
           initialReadingAnchor: initialReadingAnchor,
+          initialTranslationReadingAnchor: initialTranslationReadingAnchor,
           initialVideoAttachment: initialVideoAttachment,
           parseSubtitles: widget.parseSubtitles,
           parseEpub: widget.parseEpub,
@@ -405,6 +411,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
 
     final initialReadingAnchor = await _loadReadingAnchorBestEffort(doc.id);
+    // RS-24 / LD-31/32: bottom pane's own saved paragraph position — never
+    // used to sync to the original (D9).
+    final initialTranslationReadingAnchor = translationDocumentId == null
+        ? null
+        : await _loadReadingAnchorBestEffort(translationDocumentId);
     // LD-19 / D4: do not restore video attachment for EPUB.
 
     if (!mounted) return;
@@ -421,6 +432,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           translationChapters: translationChapters,
           translationDocumentId: translationDocumentId,
           initialReadingAnchor: initialReadingAnchor,
+          initialTranslationReadingAnchor: initialTranslationReadingAnchor,
           parseSubtitles: widget.parseSubtitles,
           parseEpub: widget.parseEpub,
           tokenizeCues: widget.tokenizeCues,
