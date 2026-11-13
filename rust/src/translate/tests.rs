@@ -5,9 +5,9 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::{
-    clear_engine_for_test, init_offline_translate, install_engine_for_test,
-    is_offline_translate_ready, translate_text, GlossResult, NamedAssetBytes, OfflineTranslator,
-    TranslateError,
+    clear_engine_for_test, init_offline_translate, init_offline_translate_from_dir,
+    install_engine_for_test, is_offline_translate_ready, translate_text, GlossResult,
+    NamedAssetBytes, OfflineTranslator, TranslateError,
 };
 
 struct EchoFake;
@@ -156,6 +156,17 @@ fn to08_init_missing_or_empty_assets() {
     assert_eq!(err.unwrap_err(), TranslateError::EngineUnavailable);
 }
 
+/// [TO-14] Missing required file in model dir → EngineUnavailable.
+#[test]
+fn to14_init_from_dir_missing_file() {
+    let _lock = reset();
+    let err = init_offline_translate_from_dir(
+        std::env::temp_dir().join("my_translator_missing_opus_dir_to14"),
+    );
+    assert_eq!(err.unwrap_err(), TranslateError::EngineUnavailable);
+    assert!(!is_offline_translate_ready());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod real_ort {
     use super::*;
@@ -192,6 +203,47 @@ mod real_ort {
         let _lock = reset();
         init_offline_translate(load_assets()).expect("init real assets");
         assert!(is_offline_translate_ready());
+    }
+
+    /// Flat dir with required basenames (product extract layout).
+    fn flat_model_dir() -> PathBuf {
+        let src = model_dir();
+        let dest = std::env::temp_dir().join(format!(
+            "my_translator_opus_flat_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dest);
+        fs::create_dir_all(&dest).expect("flat dir");
+        fs::copy(src.join("tokenizer.json"), dest.join("tokenizer.json"))
+            .expect("tokenizer");
+        fs::copy(
+            src.join("onnx/encoder_model_uint8.onnx"),
+            dest.join("encoder_model_uint8.onnx"),
+        )
+        .expect("encoder");
+        fs::copy(
+            src.join("onnx/decoder_model_uint8.onnx"),
+            dest.join("decoder_model_uint8.onnx"),
+        )
+        .expect("decoder");
+        dest
+    }
+
+    /// [TO-14] Valid model dir → init Ok + ready; missing basename → EngineUnavailable.
+    #[test]
+    fn to14_init_from_real_model_dir() {
+        let _lock = reset();
+        let dir = flat_model_dir();
+        init_offline_translate_from_dir(&dir).expect("init from dir");
+        assert!(is_offline_translate_ready());
+
+        clear_engine_for_test();
+        // Drop one required file → EngineUnavailable.
+        fs::remove_file(dir.join("encoder_model_uint8.onnx")).expect("rm encoder");
+        let err = init_offline_translate_from_dir(&dir);
+        assert_eq!(err.unwrap_err(), TranslateError::EngineUnavailable);
+        assert!(!is_offline_translate_ready());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// [TO-01] Real engine: English word → non-empty RU gloss.

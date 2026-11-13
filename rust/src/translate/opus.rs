@@ -41,7 +41,8 @@ pub struct OpusMtEnRu {
 }
 
 impl OpusMtEnRu {
-    /// Build from named asset bytes (Flutter AssetBundle → FRB).
+    /// Build from named asset bytes (tests / compat). Prefer [`Self::from_model_dir`]
+    /// for the product cold path (avoids Dart→FRB encode of full ONNX).
     pub fn from_assets(assets: Vec<NamedAssetBytes>) -> Result<Self, TranslateError> {
         let mut map = collect_assets(assets)?;
         let tokenizer_bytes = map
@@ -73,6 +74,52 @@ impl OpusMtEnRu {
         drop(tokenizer_bytes);
         drop(encoder_bytes);
         drop(decoder_bytes);
+
+        Ok(Self {
+            tokenizer,
+            encoder: Mutex::new(encoder),
+            decoder: Mutex::new(decoder),
+        })
+    }
+
+    /// Build from a directory containing required basenames (product path / TO-14).
+    pub fn from_model_dir(model_dir: &Path) -> Result<Self, TranslateError> {
+        // Same basename contract as `from_assets` / `collect_assets` (REQUIRED_ASSET_NAMES).
+        let mut paths = HashMap::new();
+        for &name in REQUIRED_ASSET_NAMES {
+            let path = model_dir.join(name);
+            if !path.is_file() {
+                return Err(TranslateError::EngineUnavailable);
+            }
+            paths.insert(name, path);
+        }
+
+        let tokenizer = Tokenizer::from_file(
+            paths
+                .get("tokenizer.json")
+                .ok_or(TranslateError::EngineUnavailable)?,
+        )
+        .map_err(|_| TranslateError::EngineUnavailable)?;
+
+        let env = ort_environment()?;
+
+        let encoder = Session::builder(env)
+            .map_err(|_| TranslateError::EngineUnavailable)?
+            .commit_from_file(
+                paths
+                    .get("encoder_model_uint8.onnx")
+                    .ok_or(TranslateError::EngineUnavailable)?,
+            )
+            .map_err(|_| TranslateError::EngineUnavailable)?;
+
+        let decoder = Session::builder(env)
+            .map_err(|_| TranslateError::EngineUnavailable)?
+            .commit_from_file(
+                paths
+                    .get("decoder_model_uint8.onnx")
+                    .ok_or(TranslateError::EngineUnavailable)?,
+            )
+            .map_err(|_| TranslateError::EngineUnavailable)?;
 
         Ok(Self {
             tokenizer,

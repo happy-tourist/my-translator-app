@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show AnyhowException, PanicException;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'package:my_translator_app/src/rust/api/translate.dart' as rust_translate;
 
@@ -16,12 +20,11 @@ const Map<String, String> kOfflineTranslateNativeAssetPaths = {
       'assets/models/opus-mt-en-ru/onnx/decoder_model_uint8.onnx',
 };
 
-/// Own large AssetBundle views with chunked copy + yields (design D3 / TO-11).
-///
-/// Avoid `Isolate.run` on AssetBundle views: external/Immutable buffers are often
-/// not isolate-sendable, and sending ~100MB+ still blocks the UI isolate.
-const int _kLargeAssetCopyBytes = 64 * 1024;
-const int _kAssetCopyChunkBytes = 512 * 1024;
+/// Chunked disk write size (design D13 / TO-11) — yield between chunks.
+const int _kAssetWriteChunkBytes = 512 * 1024;
+
+/// Subdir under application support for extracted OPUS-MT files.
+const String _kModelCacheSubdir = 'opus-mt-en-ru';
 
 /// Process-wide in-flight ensure (design D2) — shared by warm-up and Translate.
 Future<void>? _sharedInitFuture;
@@ -34,9 +37,25 @@ Future<bool> Function()? debugIsOfflineTranslateReadyOverride;
 @visibleForTesting
 Future<void> Function(AssetBundle bundle)? debugLoadAndInitOverride;
 
+/// Test hook: replace model cache directory (avoids path_provider in unit tests).
+@visibleForTesting
+Future<Directory> Function()? debugModelDirOverride;
+
+/// Test hook: replace path/dir FRB init (avoids ORT in unit tests).
+@visibleForTesting
+Future<void> Function(String modelDir)? debugInitFromDirOverride;
+
 /// Test hook: count real/fake inits started via the shared ensure path.
 @visibleForTesting
 int debugOfflineTranslateInitStarts = 0;
+
+/// Test hook: count extract passes that actually copy at least one asset file.
+@visibleForTesting
+int debugOfflineTranslateExtractPasses = 0;
+
+/// Test hook: count path/dir FRB inits (product path — never full bytes→FRB).
+@visibleForTesting
+int debugOfflineTranslatePathInitStarts = 0;
 
 /// Clears process-wide ensure state and test hooks.
 @visibleForTesting
@@ -44,10 +63,14 @@ void debugResetOfflineTranslateNativeEnsure() {
   _sharedInitFuture = null;
   debugIsOfflineTranslateReadyOverride = null;
   debugLoadAndInitOverride = null;
+  debugModelDirOverride = null;
+  debugInitFromDirOverride = null;
   debugOfflineTranslateInitStarts = 0;
+  debugOfflineTranslateExtractPasses = 0;
+  debugOfflineTranslatePathInitStarts = 0;
 }
 
-/// Native offline translate: AssetBundle bytes → lazy FRB init → translate_text.
+/// Native offline translate: AssetBundle → app-local dir → path FRB init.
 OfflineTranslateFn createOfflineTranslate({AssetBundle? bundle}) {
   final impl = _NativeOfflineTranslate(bundle: bundle ?? rootBundle);
   return impl.translate;
@@ -57,7 +80,7 @@ OfflineTranslateFn createOfflineTranslate({AssetBundle? bundle}) {
 ///
 /// Reuses [isOfflineTranslateReady] / one in-flight `_loadAndInit` across all
 /// `createOfflineTranslate()` instances and [warmUpOfflineTranslate].
-/// When already ready — no-op (no second `initOfflineTranslate`).
+/// When already ready — no-op (no second extract / path init).
 Future<void> ensureOfflineTranslateReady({AssetBundle? bundle}) async {
   // Prefer joining an in-flight load before probing ready (design D2).
   final inFlight = _sharedInitFuture;
@@ -110,59 +133,131 @@ Future<void> _startLoadAndInit(AssetBundle bundle) {
   return _loadAndInit(bundle);
 }
 
-/// Cold path (design D3): yield frame → sequential AssetBundle awaits →
-/// chunked own-copy with yields → async FRB init.
+/// Cold path (design D13): yield → extract/reuse assets on disk → path FRB init.
+///
+/// Product ensure MUST NOT pass full ONNX through Dart→FRB `Vec<u8>` (TO-11/14).
 Future<void> _loadAndInit(AssetBundle bundle) async {
-  // D3.1: yield so spinner / shell can paint before heavy work.
+  // Yield so spinner / shell can paint before heavy work.
   await Future<void>.delayed(Duration.zero);
 
-  final assets = <rust_translate.OfflineModelAsset>[];
+  final modelDir = await _resolveModelDir();
+  await modelDir.create(recursive: true);
+
+  final didExtract = await _extractModelAssetsIfNeeded(bundle, modelDir);
+  if (didExtract) {
+    debugOfflineTranslateExtractPasses++;
+  }
+
+  debugOfflineTranslatePathInitStarts++;
+  final initOverride = debugInitFromDirOverride;
+  if (initOverride != null) {
+    await initOverride(modelDir.path);
+  } else {
+    await rust_translate.initOfflineTranslateFromDir(modelDir: modelDir.path);
+  }
+}
+
+Future<Directory> _resolveModelDir() async {
+  final override = debugModelDirOverride;
+  if (override != null) {
+    return override();
+  }
+  final support = await getApplicationSupportDirectory();
+  return Directory(p.join(support.path, _kModelCacheSubdir));
+}
+
+/// Returns true when at least one file was written (not a pure reuse).
+Future<bool> _extractModelAssetsIfNeeded(
+  AssetBundle bundle,
+  Directory modelDir,
+) async {
+  // Fast reuse: skip AssetBundle loads when all required files look present.
+  if (await _modelFilesLookReady(modelDir)) {
+    return false;
+  }
+
+  var wroteAny = false;
   for (final entry in kOfflineTranslateNativeAssetPaths.entries) {
-    // D3.2: sequential async loads (one asset at a time).
+    // Yield between assets so gate/Translate spinners can paint (TO-11).
+    await Future<void>.delayed(Duration.zero);
+    final dest = File(p.join(modelDir.path, entry.key));
     final data = await bundle.load(entry.value);
+    final length = data.lengthInBytes;
+    if (length == 0) {
+      throw FlutterError('Offline translate asset empty: ${entry.value}');
+    }
+    if (await dest.exists() && await dest.length() == length) {
+      // Reuse this file; still may need to write others.
+      continue;
+    }
+    wroteAny = true;
     final view = data.buffer.asUint8List(
       data.offsetInBytes,
       data.lengthInBytes,
     );
-    // D3.2: own large buffers without a single multi‑100MB sync stall.
-    final bytes = await _ownAssetBytes(view);
-    if (bytes.isEmpty) {
-      throw FlutterError('Offline translate asset empty: ${entry.value}');
-    }
-    assets.add(
-      rust_translate.OfflineModelAsset(
-        name: entry.key,
-        bytes: bytes,
-      ),
-    );
+    await _writeAssetFileChunked(dest, view);
   }
-  // D3.3: FRB init stays Normal async (worker pool) — not sync on UI isolate.
-  await rust_translate.initOfflineTranslate(assets: assets);
+  return wroteAny;
 }
 
-Future<Uint8List> _ownAssetBytes(Uint8List view) async {
-  final length = view.lengthInBytes;
-  if (length < _kLargeAssetCopyBytes) {
-    return Uint8List.fromList(view);
-  }
-  final owned = Uint8List(length);
-  var offset = 0;
-  while (offset < length) {
-    final end = offset + _kAssetCopyChunkBytes;
-    final chunkEnd = end < length ? end : length;
-    owned.setRange(offset, chunkEnd, view, offset);
-    offset = chunkEnd;
-    if (offset < length) {
-      await Future<void>.delayed(Duration.zero);
+/// Heuristic disk reuse (design D13): required basenames present with plausible sizes.
+Future<bool> _modelFilesLookReady(Directory modelDir) async {
+  for (final name in kOfflineTranslateNativeAssetPaths.keys) {
+    final file = File(p.join(modelDir.path, name));
+    if (!await file.exists()) {
+      return false;
+    }
+    final length = await file.length();
+    final minBytes = name.endsWith('.onnx') ? (1024 * 1024) : 1024;
+    if (length < minBytes) {
+      return false;
     }
   }
-  return owned;
+  return true;
 }
 
-/// Test hook: chunked own-copy used on the native cold path (design D3 / TO-11).
+/// Chunked write with yields so the UI isolate can paint (TO-11).
+Future<void> _writeAssetFileChunked(File dest, Uint8List view) async {
+  final tmp = File('${dest.path}.tmp');
+  final sink = tmp.openWrite();
+  try {
+    var offset = 0;
+    final length = view.lengthInBytes;
+    while (offset < length) {
+      final end = offset + _kAssetWriteChunkBytes;
+      final chunkEnd = end < length ? end : length;
+      sink.add(Uint8List.sublistView(view, offset, chunkEnd));
+      offset = chunkEnd;
+      if (offset < length) {
+        await sink.flush();
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+    await sink.flush();
+  } finally {
+    await sink.close();
+  }
+  if (await dest.exists()) {
+    await dest.delete();
+  }
+  await tmp.rename(dest.path);
+}
+
+/// Test hook: chunked disk write used on the native cold path (design D13 / TO-11).
 @visibleForTesting
-Future<Uint8List> debugOwnOfflineTranslateAssetBytes(Uint8List view) =>
-    _ownAssetBytes(view);
+Future<void> debugWriteOfflineTranslateAssetFileChunked(
+  File dest,
+  Uint8List view,
+) =>
+    _writeAssetFileChunked(dest, view);
+
+/// Test hook: extract/reuse pass used by product `_loadAndInit`.
+@visibleForTesting
+Future<bool> debugExtractOfflineTranslateModelAssets(
+  AssetBundle bundle,
+  Directory modelDir,
+) =>
+    _extractModelAssetsIfNeeded(bundle, modelDir);
 
 class _NativeOfflineTranslate {
   _NativeOfflineTranslate({required this._bundle});
@@ -194,6 +289,15 @@ class _NativeOfflineTranslate {
       // Missing / unreadable AssetBundle entries → same UX as engine down (TO-04).
       assert(() {
         debugPrint('offline translate asset: $e\n$st');
+        return true;
+      }());
+      return const OfflineTranslateErr(
+        kind: OfflineTranslateErrorKind.engineUnavailable,
+      );
+    } on FileSystemException catch (e, st) {
+      // Extract / support-dir I/O fail → engine down (TO-04 / D13), not Internal.
+      assert(() {
+        debugPrint('offline translate filesystem: $e\n$st');
         return true;
       }());
       return const OfflineTranslateErr(

@@ -9,9 +9,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
-/// Load offline OPUS-MT from named asset bytes. Do **not** call from `init_app`.
+/// Load offline OPUS-MT from named asset bytes (tests / compat).
+/// Do **not** call from `init_app`. Product warm-up prefers
+/// [`init_offline_translate_from_dir`].
 Future<void> initOfflineTranslate({required List<OfflineModelAsset> assets}) =>
     RustLib.instance.api.crateApiTranslateInitOfflineTranslate(assets: assets);
+
+/// Load offline OPUS-MT from a directory with required basenames
+/// (`tokenizer.json`, `encoder_model_uint8.onnx`, `decoder_model_uint8.onnx`).
+/// Product native cold path (design D8/D13). Do **not** call from `init_app`.
+Future<void> initOfflineTranslateFromDir({required String modelDir}) => RustLib
+    .instance
+    .api
+    .crateApiTranslateInitOfflineTranslateFromDir(modelDir: modelDir);
 
 /// Translate a word or phrase (surface as displayed). Pair: EN→RU only (case-insensitive).
 Future<TranslationResult> translateText({
@@ -28,7 +38,7 @@ Future<TranslationResult> translateText({
 Future<bool> isOfflineTranslateReady() =>
     RustLib.instance.api.crateApiTranslateIsOfflineTranslateReady();
 
-/// Named model asset bytes from Flutter `AssetBundle` (no OS paths).
+/// Named model asset bytes from Flutter `AssetBundle` (tests / compat).
 class OfflineModelAsset {
   /// Basename, e.g. `tokenizer.json` or `encoder_model_uint8.onnx`.
   final String name;

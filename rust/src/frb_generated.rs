@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -810757139;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -776550203;
 
 // Section: executor
 
@@ -143,6 +143,41 @@ fn wire__crate__api__translate__init_offline_translate_impl(
             move |context| {
                 transform_result_sse::<_, crate::api::translate::TranslateErrorKind>((move || {
                     let output_ok = crate::api::translate::init_offline_translate(api_assets)?;
+                    std::result::Result::Ok(output_ok)
+                })(
+                ))
+            }
+        },
+    )
+}
+fn wire__crate__api__translate__init_offline_translate_from_dir_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "init_offline_translate_from_dir",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_model_dir = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::translate::TranslateErrorKind>((move || {
+                    let output_ok =
+                        crate::api::translate::init_offline_translate_from_dir(api_model_dir)?;
                     std::result::Result::Ok(output_ok)
                 })(
                 ))
@@ -743,24 +778,30 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        4 => wire__crate__api__translate__is_offline_translate_ready_impl(
+        4 => wire__crate__api__translate__init_offline_translate_from_dir_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        5 => wire__crate__api__tokenize__lemma_keys_for_surfaces_impl(
+        5 => wire__crate__api__translate__is_offline_translate_ready_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        6 => wire__crate__api__tokenize__mark_vocab_tokens_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__epub__parse_epub_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__parse__parse_subtitles_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__simple__process_text_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__tokenize__tokenize_cues_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__translate__translate_text_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__tokenize__lemma_keys_for_surfaces_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        7 => wire__crate__api__tokenize__mark_vocab_tokens_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__epub__parse_epub_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__parse__parse_subtitles_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__simple__process_text_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__tokenize__tokenize_cues_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__translate__translate_text_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

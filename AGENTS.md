@@ -6,6 +6,8 @@
 
 Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](project-map.md) (`my_translator_meta` → `..`), затем `my_translator_meta/AGENTS.md` и `.agents/skills/` (`client/` = Flutter, `server/` = Rust core). Локальных `.agents/skills/` здесь нет.
 
+**Task/субагенты:** не передавать `model` — наследовать родителя. Канон: `my_translator_meta/.agents/SUBAGENT-MODEL.md`.
+
 Здесь **один репозиторий** с двумя связанными слоями:
 
 | Слой | Роль | Каталог |
@@ -16,7 +18,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 
 Связка — **flutter_rust_bridge** (FRB) 2.13.0: API в Rust (`rust/src/api/`) → generated Dart (`lib/src/rust/`). На native — FFI, на Web — WASM (in-process). На текущем этапе внешние API-ключи не используются.
 
-**Offline translate (OPUS-MT EN→RU):** dual runtime — **native** = Rust `ort` + thin FRB (`init_offline_translate` / `translate_text`); **Web** = Transformers.js behind the same Dart facade `lib/data/translate/` (**не** через Rust WASM). UI всегда через facade (Keys / SnackBar — OpenSpec design D4); см. meta skill `work-with-translate`.
+**Offline translate (OPUS-MT EN→RU):** dual runtime — **native** = Rust `ort` + thin FRB (`init_offline_translate_from_dir` product path; `init_offline_translate` bytes MAY for tests; `translate_text`); **Web** = Transformers.js behind the same Dart facade `lib/data/translate/` (**не** через Rust WASM). UI всегда через facade (Keys / SnackBar — OpenSpec design D4); см. meta skill `work-with-translate`.
 
 ---
 
@@ -61,7 +63,7 @@ Skills / OpenSpec / docs — в sibling meta: резолв [`project-map.md`](pr
 ### Сейчас в коде
 
 - Flutter: shell **Library** (папки / import SRT·VTT·ASS·EPUB / open→Reader + best-effort linked translation / video for subtitles) + **Vocab** (CRUD + Translate); cues-first **or** EPUB book-mode Reader (chapter pager) with single-token tap→sheet (+ Translate), morph lemma highlight, split toggle / load-delete translation / time or chapter+paragraph one-shot + format-gated reading-anchor resume, optional video frame strip (`lib/data/video/`); Drift schema v5 (`surface_key`, video attachment + `DocumentVideoFrames`; Web EPUB base64 in `content`) + repositories; offline translate facade `lib/data/translate/`
-- Rust: `parse/` (+ `parse/epub`, rbook) + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + `translate/` (native ORT) + FRB `parse_subtitles` / `parse_epub` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` / `init_offline_translate` / `translate_text` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
+- Rust: `parse/` (+ `parse/epub`, rbook) + `tokenize/` (panko) + `lemmatize/` (EN WordNet) + `translate/` (native ORT) + FRB `parse_subtitles` / `parse_epub` / `tokenize_cues` / `mark_vocab_tokens` / `lemma_keys_for_surfaces` / `init_offline_translate_from_dir` (product) / `init_offline_translate` (bytes tests) / `translate_text` (no pairing API); scaffold `process_text` / `add_numbers` / `init_app` ещё в crate
 - Платформы: Android, iOS, Web (+ desktop runners из Flutter scaffold); Web MT — Transformers.js worker + `web/translate_bridge.js`
 
 ---
@@ -198,7 +200,7 @@ Rust:
 2. `rust/src/api/mod.rs` — `simple`, `parse`, `epub`, `tokenize`, `translate`
 3. `rust/src/parse/` — subtitle + `epub/` parse core; `api/parse.rs` / `api/epub.rs` — тонкий FRB
 4. `rust/src/tokenize/` + `lemmatize/` — panko spans + EN WordNet morph keys; thin exports on `api/tokenize.rs`
-5. `rust/src/translate/` + `api/translate.rs` — native ORT (`init_offline_translate` / `translate_text` / `is_offline_translate_ready`); Web — JS за facade, без FRB translate
+5. `rust/src/translate/` + `api/translate.rs` — native ORT (`init_offline_translate_from_dir` product / `init_offline_translate` bytes tests / `translate_text` / `is_offline_translate_ready`); Web — JS за facade, без FRB translate
 6. `rust/src/api/simple.rs` — scaffold demo (не product home)
 
 User DB — не в Rust.
@@ -283,7 +285,7 @@ lib/**  (Flutter UI + Drift data layer + translate facade)
 
 | Dart (generated / facade) | Rust | Notes |
 |---------------------------|------|--------|
-| via `lib/data/translate/` → `initOfflineTranslate` / `translateText` / `isOfflineTranslateReady` | `api::translate::*` | Native only; wasm stubs → `EngineUnavailable` |
+| via `lib/data/translate/` → extract→`initOfflineTranslateFromDir` (product) / `initOfflineTranslate` (bytes tests) / `translateText` / `isOfflineTranslateReady` | `api::translate::*` | Native only; wasm stubs → `EngineUnavailable` |
 | Web path | — | Transformers.js worker; **not** these FRB exports |
 
 - (позже) optional AI explain/translate

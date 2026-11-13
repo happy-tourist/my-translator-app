@@ -1,31 +1,24 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:my_translator_app/data/translate/offline_translate_native.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
-  tearDown(debugResetOfflineTranslateNativeEnsure);
+  late Directory tempRoot;
 
-  // Align fix: large AssetBundle views use chunked setRange + yields (not Isolate.run).
-  test('TO-11 chunked own-copy preserves bytes across multi-chunk buffer',
-      () async {
-    // >64KiB threshold and >512KiB chunk → at least one yield between setRange.
-    final src = Uint8List(1024 * 1024);
-    for (var i = 0; i < src.length; i++) {
-      src[i] = i & 0xff;
-    }
-    final owned = await debugOwnOfflineTranslateAssetBytes(src);
-    expect(owned.length, src.length);
-    expect(owned, orderedEquals(src));
+  setUp(() async {
+    tempRoot = await Directory.systemTemp.createTemp('opus_ensure_test_');
   });
 
-  test('TO-11 small own-copy stays sync-style fromList path', () async {
-    final src = Uint8List.fromList([1, 2, 3, 4]);
-    final owned = await debugOwnOfflineTranslateAssetBytes(src);
-    expect(owned, orderedEquals(src));
-    expect(identical(owned, src), isFalse);
+  tearDown(() async {
+    debugResetOfflineTranslateNativeEnsure();
+    if (await tempRoot.exists()) {
+      await tempRoot.delete(recursive: true);
+    }
   });
 
   // TO-12 (in-process): after warm-up/ready, further ensure is a no-op.
@@ -68,7 +61,7 @@ void main() {
     var taps = 0;
     debugIsOfflineTranslateReadyOverride = () async => false;
     debugLoadAndInitOverride = (bundle) async {
-      // Async gap only — production `_loadAndInit` owns the D3 frame yield.
+      // Async gap only — production `_loadAndInit` owns the D13 frame yield.
       await gate.future;
     };
 
@@ -98,6 +91,123 @@ void main() {
     await ensureFuture;
     await tester.pump();
     expect(find.text('ready'), findsOneWidget);
+    expect(debugOfflineTranslateInitStarts, 1);
+  });
+
+  // 11.2 / TO-14 product path: extract → path init (not bytes→FRB).
+  test('11.2 product ensure uses path init and skips second extract when ready',
+      () async {
+    final modelDir = Directory(p.join(tempRoot.path, 'opus-mt-en-ru'));
+    await modelDir.create(recursive: true);
+
+    var ready = false;
+    final pathDirs = <String>[];
+    debugIsOfflineTranslateReadyOverride = () async => ready;
+    debugModelDirOverride = () async => modelDir;
+    debugInitFromDirOverride = (dir) async {
+      pathDirs.add(dir);
+      ready = true;
+    };
+
+    // ONNX reuse heuristic requires >= 1MiB; keep just above that for speed.
+    const onnxBytes = 1024 * 1024 + 8;
+    final bundle = _SizedBundle({
+      'assets/models/opus-mt-en-ru/tokenizer.json': 2048,
+      'assets/models/opus-mt-en-ru/onnx/encoder_model_uint8.onnx': onnxBytes,
+      'assets/models/opus-mt-en-ru/onnx/decoder_model_uint8.onnx': onnxBytes,
+    });
+
+    // First ensure: extract + path init (no full bytes FRB).
+    await ensureOfflineTranslateReady(bundle: bundle);
+    expect(debugOfflineTranslateInitStarts, 1);
+    expect(debugOfflineTranslateExtractPasses, 1);
+    expect(debugOfflineTranslatePathInitStarts, 1);
+    expect(pathDirs, [modelDir.path]);
+    for (final name in kOfflineTranslateNativeAssetPaths.keys) {
+      expect(File(p.join(modelDir.path, name)).existsSync(), isTrue);
+    }
+
+    // Second ensure while ready: no second heavy extract / path init.
+    await ensureOfflineTranslateReady(bundle: bundle);
+    expect(debugOfflineTranslateInitStarts, 1);
+    expect(debugOfflineTranslateExtractPasses, 1);
+    expect(debugOfflineTranslatePathInitStarts, 1);
+  });
+
+  // 11.2 reuse: on-disk files skip AssetBundle re-write.
+  test('11.2 extract reuses on-disk files without second write', () async {
+    final modelDir = Directory(p.join(tempRoot.path, 'reuse'));
+    await modelDir.create(recursive: true);
+    // Plausible sizes so _modelFilesLookReady returns true.
+    const onnxBytes = 1024 * 1024 + 8;
+    await File(p.join(modelDir.path, 'tokenizer.json'))
+        .writeAsBytes(Uint8List(2048));
+    await File(p.join(modelDir.path, 'encoder_model_uint8.onnx'))
+        .writeAsBytes(Uint8List(onnxBytes));
+    await File(p.join(modelDir.path, 'decoder_model_uint8.onnx'))
+        .writeAsBytes(Uint8List(onnxBytes));
+
+    final wrote = await debugExtractOfflineTranslateModelAssets(
+      _ThrowingBundle(),
+      modelDir,
+    );
+    expect(wrote, isFalse);
+  });
+
+  // TO-11: chunked write yields; product path never builds OfflineModelAsset bytes.
+  test('TO-11 chunked disk write preserves bytes across multi-chunk file',
+      () async {
+    final dest = File(p.join(tempRoot.path, 'chunk.bin'));
+    final src = Uint8List(1024 * 1024);
+    for (var i = 0; i < src.length; i++) {
+      src[i] = i & 0xff;
+    }
+    await debugWriteOfflineTranslateAssetFileChunked(dest, src);
+    final read = await dest.readAsBytes();
+    expect(read, orderedEquals(src));
+  });
+
+  testWidgets(
+      'TO-11 path-init cold path keeps loader alive without bytes FRB',
+      (tester) async {
+    final extractGate = Completer<void>();
+    var ready = false;
+    var taps = 0;
+    debugIsOfflineTranslateReadyOverride = () async => ready;
+    // Product cold path = extract yields + path init (not bytes→FRB encode).
+    debugLoadAndInitOverride = (bundle) async {
+      await extractGate.future;
+      debugOfflineTranslatePathInitStarts++;
+      ready = true;
+    };
+
+    late final Future<void> ensureFuture;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: _ColdInitProbe(
+            onEnsure: () {
+              ensureFuture = ensureOfflineTranslateReady(bundle: _EmptyBundle());
+              return ensureFuture;
+            },
+            onProbeTap: () => taps++,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('cold-init-loading')), findsOneWidget);
+
+    // Frames + taps while cold path is in-flight (TO-11 live loader).
+    await tester.tap(find.byKey(const Key('probe-tap')));
+    await tester.pump();
+    expect(taps, 1);
+
+    extractGate.complete();
+    await ensureFuture;
+    await tester.pump();
+    expect(find.text('ready'), findsOneWidget);
+    expect(debugOfflineTranslatePathInitStarts, 1);
     expect(debugOfflineTranslateInitStarts, 1);
   });
 }
@@ -148,4 +258,28 @@ class _ColdInitProbeState extends State<_ColdInitProbe> {
 class _EmptyBundle extends CachingAssetBundle {
   @override
   Future<ByteData> load(String key) async => ByteData(0);
+}
+
+/// AssetBundle that returns fixed-size buffers for extract tests.
+class _SizedBundle extends CachingAssetBundle {
+  _SizedBundle(this.sizes);
+
+  final Map<String, int> sizes;
+
+  @override
+  Future<ByteData> load(String key) async {
+    final n = sizes[key];
+    if (n == null) {
+      throw FlutterError('Missing asset: $key');
+    }
+    return ByteData(n);
+  }
+}
+
+/// Fails if any asset is loaded — used to prove reuse skips AssetBundle.
+class _ThrowingBundle extends CachingAssetBundle {
+  @override
+  Future<ByteData> load(String key) async {
+    throw StateError('unexpected AssetBundle.load($key) during reuse');
+  }
 }

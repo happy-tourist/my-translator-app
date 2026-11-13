@@ -14,6 +14,7 @@ mod opus;
 pub(crate) use error::TranslateError;
 pub(crate) use types::{GlossResult, NamedAssetBytes};
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Internal engine contract (design D3).
@@ -58,7 +59,7 @@ pub(crate) fn validate_language_pair(
     }
 }
 
-/// Load ORT sessions from named asset bytes. Replaces any prior engine.
+/// Load ORT sessions from named asset bytes (tests / compat). Replaces any prior engine.
 ///
 /// On `wasm32`, always [`TranslateError::EngineUnavailable`].
 pub(crate) fn init_offline_translate(
@@ -79,6 +80,34 @@ pub(crate) fn init_offline_translate(
         // Build sessions outside the slot lock so concurrent ready/translate
         // checks are not blocked for the whole ORT load.
         let engine = opus::OpusMtEnRu::from_assets(assets)?;
+        let mut slot = engine_slot()
+            .lock()
+            .map_err(|_| TranslateError::Internal)?;
+        *slot = Some(Arc::new(engine));
+        Ok(())
+    }
+}
+
+/// Load ORT sessions from a model directory (required basenames on disk).
+/// Product cold path — avoid Dart→FRB full ONNX bytes (design D8/D13, TO-14).
+///
+/// On `wasm32`, always [`TranslateError::EngineUnavailable`].
+pub(crate) fn init_offline_translate_from_dir(
+    model_dir: impl AsRef<Path>,
+) -> Result<(), TranslateError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = model_dir;
+        let mut slot = engine_slot()
+            .lock()
+            .map_err(|_| TranslateError::Internal)?;
+        *slot = None;
+        return Err(TranslateError::EngineUnavailable);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let engine = opus::OpusMtEnRu::from_model_dir(model_dir.as_ref())?;
         let mut slot = engine_slot()
             .lock()
             .map_err(|_| TranslateError::Internal)?;

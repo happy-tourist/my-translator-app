@@ -46,7 +46,7 @@ impl std::fmt::Display for TranslateErrorKind {
 
 impl std::error::Error for TranslateErrorKind {}
 
-/// Named model asset bytes from Flutter `AssetBundle` (no OS paths).
+/// Named model asset bytes from Flutter `AssetBundle` (tests / compat).
 #[derive(Debug, Clone)]
 pub struct OfflineModelAsset {
     /// Basename, e.g. `tokenizer.json` or `encoder_model_uint8.onnx`.
@@ -54,7 +54,9 @@ pub struct OfflineModelAsset {
     pub bytes: Vec<u8>,
 }
 
-/// Load offline OPUS-MT from named asset bytes. Do **not** call from `init_app`.
+/// Load offline OPUS-MT from named asset bytes (tests / compat).
+/// Do **not** call from `init_app`. Product warm-up prefers
+/// [`init_offline_translate_from_dir`].
 pub fn init_offline_translate(
     assets: Vec<OfflineModelAsset>,
 ) -> Result<(), TranslateErrorKind> {
@@ -66,6 +68,15 @@ pub fn init_offline_translate(
         })
         .collect();
     translate::init_offline_translate(domain_assets).map_err(Into::into)
+}
+
+/// Load offline OPUS-MT from a directory with required basenames
+/// (`tokenizer.json`, `encoder_model_uint8.onnx`, `decoder_model_uint8.onnx`).
+/// Product native cold path (design D8/D13). Do **not** call from `init_app`.
+pub fn init_offline_translate_from_dir(
+    model_dir: String,
+) -> Result<(), TranslateErrorKind> {
+    translate::init_offline_translate_from_dir(model_dir).map_err(Into::into)
 }
 
 /// Translate a word or phrase (surface as displayed). Pair: EN→RU only (case-insensitive).
