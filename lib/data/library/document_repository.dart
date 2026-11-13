@@ -5,19 +5,31 @@ import 'package:my_translator_app/data/library/document_content_store.dart';
 import 'package:my_translator_app/data/library/document_format.dart';
 import 'package:my_translator_app/data/library/library_exceptions.dart';
 
-/// Saved original-pane reading position (`library/documents` LD-17 / LD-28).
+/// Saved original-pane reading position (`library/documents` LD-17 / LD-28 / LD-33).
 ///
 /// Format-gated semantics for [startMs]:
 /// - subtitle documents: cue `startMs` (milliseconds);
-/// - EPUB (`documentFormatEpub`): **0-based chapter index** (design D6).
+/// - EPUB original (`documentFormatEpub`): **0-based chapter index** (LD-28);
+/// - EPUB translation: **0-based paragraph index** within the linked chapter
+///   (LD-32; chapter follows original on reopen).
+///
+/// [paragraphIndex] is the mid-chapter paragraph for **original** EPUB (LD-33);
+/// null/absent on subtitle rows and on pre-schema-8 EPUB anchors (open at 0).
 class ReadingAnchor {
-  const ReadingAnchor({required this.startMs, this.alignment});
+  const ReadingAnchor({
+    required this.startMs,
+    this.alignment,
+    this.paragraphIndex,
+  });
 
-  /// Subtitle cue start ms, or EPUB 0-based chapter index (see class docs).
+  /// Subtitle cue start ms, or EPUB chapter/paragraph index (see class docs).
   final int startMs;
 
   /// Optional `itemLeadingEdge` in `0.0…1.0` (cue list or paragraph list).
   final double? alignment;
+
+  /// EPUB original mid-chapter paragraph index (LD-33); null when unset.
+  final int? paragraphIndex;
 }
 
 /// Persisted video attachment on an original document (`library/documents` LD-20).
@@ -257,15 +269,18 @@ class DocumentRepository {
     return getById(translationId);
   }
 
-  /// Persists the original document's reading anchor (LD-17 / LD-28 / D6).
+  /// Persists a document's reading anchor (LD-17 / LD-28 / LD-33 / D14).
   ///
-  /// [startMs] is cue start ms for subtitles, or 0-based chapter index for EPUB
-  /// (same Drift column; format-gated at call sites). Best-effort — must not
-  /// block UI when the row is missing.
+  /// [startMs] is cue start ms for subtitles, or 0-based chapter index for
+  /// EPUB originals (same Drift column; format-gated at call sites).
+  /// [paragraphIndex] is the mid-chapter paragraph for EPUB originals (LD-33);
+  /// omit / null clears it (subtitle / pre-mid-chapter rows). Best-effort —
+  /// must not block UI when the row is missing.
   Future<void> saveReadingAnchor({
     required int documentId,
     required int startMs,
     double? alignment,
+    int? paragraphIndex,
   }) async {
     final clampedAlignment = alignment?.clamp(0.0, 1.0);
     await (_db.update(_db.documents)..where((d) => d.id.equals(documentId)))
@@ -273,15 +288,17 @@ class DocumentRepository {
           DocumentsCompanion(
             lastReadStartMs: Value(startMs),
             lastReadAlignment: Value(clampedAlignment?.toDouble()),
+            lastReadParagraphIndex: Value(paragraphIndex),
             updatedAt: Value(DateTime.now()),
           ),
         );
   }
 
-  /// Loads the saved reading anchor for [documentId], or null (LD-17 / LD-28).
+  /// Loads the saved reading anchor for [documentId], or null (LD-17 / LD-28 / LD-33).
   ///
   /// Callers interpret [ReadingAnchor.startMs] by document format (chapter
-  /// index when EPUB).
+  /// index when EPUB original). [ReadingAnchor.paragraphIndex] is null when
+  /// the row predates schema 8 or was never mid-chapter-persisted.
   Future<ReadingAnchor?> loadReadingAnchor(int documentId) async {
     final doc = await getById(documentId);
     if (doc == null) return null;
@@ -290,6 +307,7 @@ class DocumentRepository {
     return ReadingAnchor(
       startMs: startMs,
       alignment: doc.lastReadAlignment,
+      paragraphIndex: doc.lastReadParagraphIndex,
     );
   }
 

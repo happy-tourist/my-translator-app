@@ -21,7 +21,7 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.connect() => AppDatabase(_openConnection());
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -57,8 +57,21 @@ class AppDatabase extends _$AppDatabase {
       }
       // Schema 7: Documents.folderId nullable (root-level docs). SQLite cannot
       // drop NOT NULL via ALTER — recreate table (TableMigration / customStatement).
+      // Schema 8 column is folded into this recreate when upgrading from < 7 so
+      // alterTable does not SELECT a missing last_read_paragraph_index.
       if (from < 7) {
-        await migrator.alterTable(TableMigration(documents));
+        await migrator.alterTable(
+          TableMigration(
+            documents,
+            newColumns: [documents.lastReadParagraphIndex],
+          ),
+        );
+      } else if (from < 8) {
+        // Schema 8 only: EPUB original mid-chapter paragraph (LD-33 / D14).
+        await migrator.addColumn(
+          documents,
+          documents.lastReadParagraphIndex,
+        );
       }
     },
   );

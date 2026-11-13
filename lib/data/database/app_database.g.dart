@@ -461,6 +461,16 @@ class $DocumentsTable extends Documents
         type: DriftSqlType.double,
         requiredDuringInsert: false,
       );
+  static const VerificationMeta _lastReadParagraphIndexMeta =
+      const VerificationMeta('lastReadParagraphIndex');
+  @override
+  late final GeneratedColumn<int> lastReadParagraphIndex = GeneratedColumn<int>(
+    'last_read_paragraph_index',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _videoUriMeta = const VerificationMeta(
     'videoUri',
   );
@@ -539,6 +549,7 @@ class $DocumentsTable extends Documents
     translationDocumentId,
     lastReadStartMs,
     lastReadAlignment,
+    lastReadParagraphIndex,
     videoUri,
     videoSandboxPath,
     videoDurationSec,
@@ -619,6 +630,15 @@ class $DocumentsTable extends Documents
         lastReadAlignment.isAcceptableOrUnknown(
           data['last_read_alignment']!,
           _lastReadAlignmentMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_read_paragraph_index')) {
+      context.handle(
+        _lastReadParagraphIndexMeta,
+        lastReadParagraphIndex.isAcceptableOrUnknown(
+          data['last_read_paragraph_index']!,
+          _lastReadParagraphIndexMeta,
         ),
       );
     }
@@ -712,6 +732,10 @@ class $DocumentsTable extends Documents
         DriftSqlType.double,
         data['${effectivePrefix}last_read_alignment'],
       ),
+      lastReadParagraphIndex: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}last_read_paragraph_index'],
+      ),
       videoUri: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}video_uri'],
@@ -768,6 +792,10 @@ class Document extends DataClass implements Insertable<Document> {
   /// Viewport alignment of the anchor row (`itemLeadingEdge`, 0.0…1.0).
   final double? lastReadAlignment;
 
+  /// EPUB original mid-chapter paragraph index (`library/documents` LD-33).
+  /// Null on subtitle rows and on pre-schema-8 EPUB anchors (open at para 0).
+  final int? lastReadParagraphIndex;
+
   /// Durable platform ref / bookmark for attached video (`reader/video-frames`).
   final String? videoUri;
 
@@ -791,6 +819,7 @@ class Document extends DataClass implements Insertable<Document> {
     this.translationDocumentId,
     this.lastReadStartMs,
     this.lastReadAlignment,
+    this.lastReadParagraphIndex,
     this.videoUri,
     this.videoSandboxPath,
     this.videoDurationSec,
@@ -821,6 +850,9 @@ class Document extends DataClass implements Insertable<Document> {
     }
     if (!nullToAbsent || lastReadAlignment != null) {
       map['last_read_alignment'] = Variable<double>(lastReadAlignment);
+    }
+    if (!nullToAbsent || lastReadParagraphIndex != null) {
+      map['last_read_paragraph_index'] = Variable<int>(lastReadParagraphIndex);
     }
     if (!nullToAbsent || videoUri != null) {
       map['video_uri'] = Variable<String>(videoUri);
@@ -862,6 +894,9 @@ class Document extends DataClass implements Insertable<Document> {
       lastReadAlignment: lastReadAlignment == null && nullToAbsent
           ? const Value.absent()
           : Value(lastReadAlignment),
+      lastReadParagraphIndex: lastReadParagraphIndex == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastReadParagraphIndex),
       videoUri: videoUri == null && nullToAbsent
           ? const Value.absent()
           : Value(videoUri),
@@ -898,6 +933,9 @@ class Document extends DataClass implements Insertable<Document> {
       lastReadAlignment: serializer.fromJson<double?>(
         json['lastReadAlignment'],
       ),
+      lastReadParagraphIndex: serializer.fromJson<int?>(
+        json['lastReadParagraphIndex'],
+      ),
       videoUri: serializer.fromJson<String?>(json['videoUri']),
       videoSandboxPath: serializer.fromJson<String?>(json['videoSandboxPath']),
       videoDurationSec: serializer.fromJson<int?>(json['videoDurationSec']),
@@ -919,6 +957,7 @@ class Document extends DataClass implements Insertable<Document> {
       'translationDocumentId': serializer.toJson<int?>(translationDocumentId),
       'lastReadStartMs': serializer.toJson<int?>(lastReadStartMs),
       'lastReadAlignment': serializer.toJson<double?>(lastReadAlignment),
+      'lastReadParagraphIndex': serializer.toJson<int?>(lastReadParagraphIndex),
       'videoUri': serializer.toJson<String?>(videoUri),
       'videoSandboxPath': serializer.toJson<String?>(videoSandboxPath),
       'videoDurationSec': serializer.toJson<int?>(videoDurationSec),
@@ -938,6 +977,7 @@ class Document extends DataClass implements Insertable<Document> {
     Value<int?> translationDocumentId = const Value.absent(),
     Value<int?> lastReadStartMs = const Value.absent(),
     Value<double?> lastReadAlignment = const Value.absent(),
+    Value<int?> lastReadParagraphIndex = const Value.absent(),
     Value<String?> videoUri = const Value.absent(),
     Value<String?> videoSandboxPath = const Value.absent(),
     Value<int?> videoDurationSec = const Value.absent(),
@@ -960,6 +1000,9 @@ class Document extends DataClass implements Insertable<Document> {
     lastReadAlignment: lastReadAlignment.present
         ? lastReadAlignment.value
         : this.lastReadAlignment,
+    lastReadParagraphIndex: lastReadParagraphIndex.present
+        ? lastReadParagraphIndex.value
+        : this.lastReadParagraphIndex,
     videoUri: videoUri.present ? videoUri.value : this.videoUri,
     videoSandboxPath: videoSandboxPath.present
         ? videoSandboxPath.value
@@ -992,6 +1035,9 @@ class Document extends DataClass implements Insertable<Document> {
       lastReadAlignment: data.lastReadAlignment.present
           ? data.lastReadAlignment.value
           : this.lastReadAlignment,
+      lastReadParagraphIndex: data.lastReadParagraphIndex.present
+          ? data.lastReadParagraphIndex.value
+          : this.lastReadParagraphIndex,
       videoUri: data.videoUri.present ? data.videoUri.value : this.videoUri,
       videoSandboxPath: data.videoSandboxPath.present
           ? data.videoSandboxPath.value
@@ -1019,6 +1065,7 @@ class Document extends DataClass implements Insertable<Document> {
           ..write('translationDocumentId: $translationDocumentId, ')
           ..write('lastReadStartMs: $lastReadStartMs, ')
           ..write('lastReadAlignment: $lastReadAlignment, ')
+          ..write('lastReadParagraphIndex: $lastReadParagraphIndex, ')
           ..write('videoUri: $videoUri, ')
           ..write('videoSandboxPath: $videoSandboxPath, ')
           ..write('videoDurationSec: $videoDurationSec, ')
@@ -1040,6 +1087,7 @@ class Document extends DataClass implements Insertable<Document> {
     translationDocumentId,
     lastReadStartMs,
     lastReadAlignment,
+    lastReadParagraphIndex,
     videoUri,
     videoSandboxPath,
     videoDurationSec,
@@ -1060,6 +1108,7 @@ class Document extends DataClass implements Insertable<Document> {
           other.translationDocumentId == this.translationDocumentId &&
           other.lastReadStartMs == this.lastReadStartMs &&
           other.lastReadAlignment == this.lastReadAlignment &&
+          other.lastReadParagraphIndex == this.lastReadParagraphIndex &&
           other.videoUri == this.videoUri &&
           other.videoSandboxPath == this.videoSandboxPath &&
           other.videoDurationSec == this.videoDurationSec &&
@@ -1078,6 +1127,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
   final Value<int?> translationDocumentId;
   final Value<int?> lastReadStartMs;
   final Value<double?> lastReadAlignment;
+  final Value<int?> lastReadParagraphIndex;
   final Value<String?> videoUri;
   final Value<String?> videoSandboxPath;
   final Value<int?> videoDurationSec;
@@ -1094,6 +1144,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.translationDocumentId = const Value.absent(),
     this.lastReadStartMs = const Value.absent(),
     this.lastReadAlignment = const Value.absent(),
+    this.lastReadParagraphIndex = const Value.absent(),
     this.videoUri = const Value.absent(),
     this.videoSandboxPath = const Value.absent(),
     this.videoDurationSec = const Value.absent(),
@@ -1111,6 +1162,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     this.translationDocumentId = const Value.absent(),
     this.lastReadStartMs = const Value.absent(),
     this.lastReadAlignment = const Value.absent(),
+    this.lastReadParagraphIndex = const Value.absent(),
     this.videoUri = const Value.absent(),
     this.videoSandboxPath = const Value.absent(),
     this.videoDurationSec = const Value.absent(),
@@ -1129,6 +1181,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Expression<int>? translationDocumentId,
     Expression<int>? lastReadStartMs,
     Expression<double>? lastReadAlignment,
+    Expression<int>? lastReadParagraphIndex,
     Expression<String>? videoUri,
     Expression<String>? videoSandboxPath,
     Expression<int>? videoDurationSec,
@@ -1147,6 +1200,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
         'translation_document_id': translationDocumentId,
       if (lastReadStartMs != null) 'last_read_start_ms': lastReadStartMs,
       if (lastReadAlignment != null) 'last_read_alignment': lastReadAlignment,
+      if (lastReadParagraphIndex != null)
+        'last_read_paragraph_index': lastReadParagraphIndex,
       if (videoUri != null) 'video_uri': videoUri,
       if (videoSandboxPath != null) 'video_sandbox_path': videoSandboxPath,
       if (videoDurationSec != null) 'video_duration_sec': videoDurationSec,
@@ -1167,6 +1222,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     Value<int?>? translationDocumentId,
     Value<int?>? lastReadStartMs,
     Value<double?>? lastReadAlignment,
+    Value<int?>? lastReadParagraphIndex,
     Value<String?>? videoUri,
     Value<String?>? videoSandboxPath,
     Value<int?>? videoDurationSec,
@@ -1185,6 +1241,8 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
           translationDocumentId ?? this.translationDocumentId,
       lastReadStartMs: lastReadStartMs ?? this.lastReadStartMs,
       lastReadAlignment: lastReadAlignment ?? this.lastReadAlignment,
+      lastReadParagraphIndex:
+          lastReadParagraphIndex ?? this.lastReadParagraphIndex,
       videoUri: videoUri ?? this.videoUri,
       videoSandboxPath: videoSandboxPath ?? this.videoSandboxPath,
       videoDurationSec: videoDurationSec ?? this.videoDurationSec,
@@ -1226,6 +1284,11 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
     if (lastReadAlignment.present) {
       map['last_read_alignment'] = Variable<double>(lastReadAlignment.value);
     }
+    if (lastReadParagraphIndex.present) {
+      map['last_read_paragraph_index'] = Variable<int>(
+        lastReadParagraphIndex.value,
+      );
+    }
     if (videoUri.present) {
       map['video_uri'] = Variable<String>(videoUri.value);
     }
@@ -1259,6 +1322,7 @@ class DocumentsCompanion extends UpdateCompanion<Document> {
           ..write('translationDocumentId: $translationDocumentId, ')
           ..write('lastReadStartMs: $lastReadStartMs, ')
           ..write('lastReadAlignment: $lastReadAlignment, ')
+          ..write('lastReadParagraphIndex: $lastReadParagraphIndex, ')
           ..write('videoUri: $videoUri, ')
           ..write('videoSandboxPath: $videoSandboxPath, ')
           ..write('videoDurationSec: $videoDurationSec, ')
@@ -2705,6 +2769,7 @@ typedef $$DocumentsTableCreateCompanionBuilder = DocumentsCompanion Function({
   Value<int?> translationDocumentId,
   Value<int?> lastReadStartMs,
   Value<double?> lastReadAlignment,
+  Value<int?> lastReadParagraphIndex,
   Value<String?> videoUri,
   Value<String?> videoSandboxPath,
   Value<int?> videoDurationSec,
@@ -2722,6 +2787,7 @@ typedef $$DocumentsTableUpdateCompanionBuilder = DocumentsCompanion Function({
   Value<int?> translationDocumentId,
   Value<int?> lastReadStartMs,
   Value<double?> lastReadAlignment,
+  Value<int?> lastReadParagraphIndex,
   Value<String?> videoUri,
   Value<String?> videoSandboxPath,
   Value<int?> videoDurationSec,
@@ -2861,6 +2927,11 @@ class $$DocumentsTableFilterComposer
 
   ColumnFilters<double> get lastReadAlignment => $composableBuilder(
     column: $table.lastReadAlignment,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get lastReadParagraphIndex => $composableBuilder(
+    column: $table.lastReadParagraphIndex,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3035,6 +3106,11 @@ class $$DocumentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get lastReadParagraphIndex => $composableBuilder(
+    column: $table.lastReadParagraphIndex,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get videoUri => $composableBuilder(
     column: $table.videoUri,
     builder: (column) => ColumnOrderings(column),
@@ -3145,6 +3221,11 @@ class $$DocumentsTableAnnotationComposer
 
   GeneratedColumn<double> get lastReadAlignment => $composableBuilder(
     column: $table.lastReadAlignment,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get lastReadParagraphIndex => $composableBuilder(
+    column: $table.lastReadParagraphIndex,
     builder: (column) => column,
   );
 
@@ -3313,6 +3394,7 @@ class $$DocumentsTableTableManager
                 Value<int?> translationDocumentId = const Value.absent(),
                 Value<int?> lastReadStartMs = const Value.absent(),
                 Value<double?> lastReadAlignment = const Value.absent(),
+                Value<int?> lastReadParagraphIndex = const Value.absent(),
                 Value<String?> videoUri = const Value.absent(),
                 Value<String?> videoSandboxPath = const Value.absent(),
                 Value<int?> videoDurationSec = const Value.absent(),
@@ -3329,6 +3411,7 @@ class $$DocumentsTableTableManager
                 translationDocumentId: translationDocumentId,
                 lastReadStartMs: lastReadStartMs,
                 lastReadAlignment: lastReadAlignment,
+                lastReadParagraphIndex: lastReadParagraphIndex,
                 videoUri: videoUri,
                 videoSandboxPath: videoSandboxPath,
                 videoDurationSec: videoDurationSec,
@@ -3347,6 +3430,7 @@ class $$DocumentsTableTableManager
                 Value<int?> translationDocumentId = const Value.absent(),
                 Value<int?> lastReadStartMs = const Value.absent(),
                 Value<double?> lastReadAlignment = const Value.absent(),
+                Value<int?> lastReadParagraphIndex = const Value.absent(),
                 Value<String?> videoUri = const Value.absent(),
                 Value<String?> videoSandboxPath = const Value.absent(),
                 Value<int?> videoDurationSec = const Value.absent(),
@@ -3363,6 +3447,7 @@ class $$DocumentsTableTableManager
                 translationDocumentId: translationDocumentId,
                 lastReadStartMs: lastReadStartMs,
                 lastReadAlignment: lastReadAlignment,
+                lastReadParagraphIndex: lastReadParagraphIndex,
                 videoUri: videoUri,
                 videoSandboxPath: videoSandboxPath,
                 videoDurationSec: videoDurationSec,

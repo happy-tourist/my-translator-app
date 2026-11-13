@@ -802,9 +802,52 @@ void main() {
     expect(loaded, isNotNull);
     expect(loaded!.startMs, 3);
     expect(loaded.alignment, closeTo(0.5, 1e-9));
+    expect(loaded.paragraphIndex, isNull);
 
     final row = await documents.getById(original.id);
     expect(row!.format, documentFormatEpub);
     expect(row.lastReadStartMs, 3);
   });
+
+  test(
+    'LD-33: EPUB original mid-chapter paragraph round-trips; '
+    'old anchor without paragraph → null',
+    () async {
+      final folder = await folders.createFolder(name: 'Books');
+      final original = await documents.importIntoFolder(
+        folderId: folder.id,
+        fileName: 'novel.epub',
+        bytes: _epubLikeBytes(),
+      );
+
+      // Pre-schema-8 style: chapter only — paragraph stays null (open at 0).
+      await documents.saveReadingAnchor(
+        documentId: original.id,
+        startMs: 2,
+        alignment: null,
+      );
+      final withoutParagraph = await documents.loadReadingAnchor(original.id);
+      expect(withoutParagraph, isNotNull);
+      expect(withoutParagraph!.startMs, 2);
+      expect(withoutParagraph.paragraphIndex, isNull);
+      expect(withoutParagraph.alignment, isNull);
+
+      await documents.saveReadingAnchor(
+        documentId: original.id,
+        startMs: 2,
+        paragraphIndex: 7,
+        alignment: 0.35,
+      );
+      final mid = await documents.loadReadingAnchor(original.id);
+      expect(mid, isNotNull);
+      expect(mid!.startMs, 2);
+      expect(mid.paragraphIndex, 7);
+      expect(mid.alignment, closeTo(0.35, 1e-9));
+
+      final row = await documents.getById(original.id);
+      expect(row!.lastReadStartMs, 2);
+      expect(row.lastReadParagraphIndex, 7);
+      expect(row.lastReadAlignment, closeTo(0.35, 1e-9));
+    },
+  );
 }

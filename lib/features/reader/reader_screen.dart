@@ -316,6 +316,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
         final raw = anchor?.startMs ?? 0;
         // RS-12 / RC-06 / D9: resume only original; translation never syncs.
         _originalChapterIndex = raw.clamp(0, chapters.length - 1);
+        // LD-33 / RS-12 / D14: seed mid-chapter paragraph (+ alignment) so
+        // reopen does not rewind to paragraph 0 of the restored chapter.
+        final paragraphs = chapters[_originalChapterIndex].paragraphs;
+        if (paragraphs.isNotEmpty) {
+          final p = anchor?.paragraphIndex ?? 0;
+          _bookOriginalInitialScrollIndex =
+              p.clamp(0, paragraphs.length - 1);
+          _bookOriginalInitialAlignment =
+              (anchor?.alignment ?? 0.0).clamp(0.0, 1.0);
+        }
       }
       // LD-32 / D10: the translation pane has no pager of its own — its
       // chapter index SHALL follow the restored original chapter at reopen
@@ -330,6 +340,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
       // (paragraph index within the chapter resolved above) — never derived
       // from the original anchor's scroll offset.
       _seedTranslationAnchor();
+      // LD-33 / RS-12: mid-chapter seed is applied via
+      // ScrollablePositionedList.initialScrollIndex / initialAlignment on the
+      // first build (same pattern as Show/Hide remount). Do not jumpTo here —
+      // it races tokenize rebuilds and can hang pumpAndSettle in tests.
       // D4 / RC-04: tokenize current chapter paragraphs (not empty originalCues).
       unawaited(_runBatchTokenize());
       // RS-16 / D5: linked translation with unequal N — notice on open (not silent).
@@ -926,8 +940,33 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // ListView key includes chapter index → remount resets scroll to start (RC-02).
     // Cache hit still runs through _runBookChapterTokenize for optional re-mark.
     unawaited(_runBatchTokenize());
-    // Persist original chapter only (LD-28 / RC-06).
-    unawaited(_persistReadingAnchor(force: true));
+    // Persist chapter + paragraph 0 explicitly (LD-28 / RC-12). Do not call
+    // `_persistReadingAnchor` here — the old list may still be attached for a
+    // frame and would re-capture the previous mid-chapter index.
+    unawaited(_persistBookChapterAnchor(chapterIndex: clamped, paragraphIndex: 0));
+  }
+
+  /// Writes EPUB original chapter (+ optional mid-chapter paragraph) without
+  /// reading live scroll positions (used after pager rewind).
+  Future<void> _persistBookChapterAnchor({
+    required int chapterIndex,
+    required int paragraphIndex,
+    double alignment = 0.0,
+  }) async {
+    if (_originalChapters.isEmpty) return;
+    try {
+      await widget.documentRepository.saveReadingAnchor(
+        documentId: widget.originalDocumentId,
+        startMs: chapterIndex.clamp(0, _originalChapters.length - 1),
+        paragraphIndex: paragraphIndex,
+        alignment: alignment,
+      );
+    } catch (e, st) {
+      assert(() {
+        debugPrint('saveReadingAnchor (epub chapter) failed: $e\n$st');
+        return true;
+      }());
+    }
   }
 
   /// D8: longest phrase span covering [tokenIndex] > shorter > single morph.
@@ -1375,7 +1414,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       });
 
       if (!enabling) {
-        // Hide: persist the bottom's own anchor now (D9 / RS-24).
+        // Hide: persist each pane's own anchor now (D9 / RS-24 / LD-33).
+        // Seeds were updated above; force falls back if lists already remounted.
+        unawaited(_persistReadingAnchor(force: true));
         unawaited(_persistTranslationReadingAnchor(force: true));
       }
 
@@ -1443,7 +1484,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
 
     if (!enabling) {
-      // Hide: persist the bottom's own anchor now (D9 / RS-24).
+      // Hide: persist each pane's own anchor now (D9 / RS-24).
+      unawaited(_persistReadingAnchor(force: true));
       unawaited(_persistTranslationReadingAnchor(force: true));
     }
 
@@ -1545,14 +1587,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _persistReadingAnchor({bool force = false}) async {
     if (_isBookMode) {
-      // LD-28 / D6: lastReadStartMs = 0-based chapter index for EPUB.
+      // LD-28 / LD-33 / D14: chapter in lastReadStartMs; paragraph + alignment
+      // from the top-visible original row (mirror bottom capture).
       if (_originalChapters.isEmpty) return;
+      final chapterIndex =
+          _originalChapterIndex.clamp(0, _originalChapters.length - 1);
+      final captured = _captureBookOriginalAnchor();
+      // force (dispose / pop): fall back to session seed so mid-chapter
+      // still persists when the list is already detached.
+      final paragraphIndex =
+          captured?.index ?? (force ? _bookOriginalInitialScrollIndex : null);
+      if (paragraphIndex == null) return;
+      final alignment = captured?.alignment ??
+          (force ? _bookOriginalInitialAlignment : null);
+      if (captured != null) {
+        _bookOriginalInitialScrollIndex = captured.index;
+        _bookOriginalInitialAlignment = captured.alignment;
+      }
       try {
         await widget.documentRepository.saveReadingAnchor(
           documentId: widget.originalDocumentId,
-          startMs:
-              _originalChapterIndex.clamp(0, _originalChapters.length - 1),
-          alignment: null,
+          startMs: chapterIndex,
+          paragraphIndex: paragraphIndex,
+          alignment: alignment,
         );
       } catch (e, st) {
         assert(() {
@@ -1566,14 +1623,24 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (widget.originalCues.isEmpty) return;
 
     final top = _topVisible(_originalPositions);
-    if (top == null) return;
-    final index = top.index;
-    if (index < 0 || index >= widget.originalCues.length) return;
+    // force (dispose / pop): fall back to session seed when the list is
+    // already detached — same harden as bottom / EPUB original (RS-24).
+    final index = top?.index ?? (force ? _originalInitialScrollIndex : null);
+    if (index == null || index < 0 || index >= widget.originalCues.length) {
+      return;
+    }
+    final alignment = (top?.itemLeadingEdge ??
+            (force ? _originalInitialAlignment : null))
+        ?.clamp(0.0, 1.0);
+    if (alignment == null) return;
+    if (top != null) {
+      _originalInitialScrollIndex = top.index;
+      _originalInitialAlignment = top.itemLeadingEdge.clamp(0.0, 1.0);
+    }
 
     // Best-effort: fail MUST NOT block UI (D10). Whole body in try (incl. toInt).
     try {
       final startMs = widget.originalCues[index].startMs.toInt();
-      final alignment = top.itemLeadingEdge.clamp(0.0, 1.0);
       await widget.documentRepository.saveReadingAnchor(
         documentId: widget.originalDocumentId,
         startMs: startMs,
@@ -1600,6 +1667,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  /// Top-visible paragraph in the **original** EPUB pane (current chapter).
+  ({int index, double alignment})? _captureBookOriginalAnchor() {
+    if (_originalChapters.isEmpty) return null;
+    final top = _topVisible(_bookOriginalPositions);
+    if (top == null) return null;
+    final chapter = _originalChapters[
+        _originalChapterIndex.clamp(0, _originalChapters.length - 1)];
+    final maxIndex =
+        chapter.paragraphs.isEmpty ? 0 : chapter.paragraphs.length - 1;
+    return (
+      index: top.index.clamp(0, maxIndex),
+      alignment: top.itemLeadingEdge.clamp(0.0, 1.0),
+    );
+  }
+
   /// Top-visible paragraph in the bottom EPUB pane (current translation
   /// chapter), clamped to bounds, or null when not attached / no chapters.
   ({int index, double alignment})? _captureBookTranslationAnchor() {
@@ -1619,7 +1701,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// Best-effort persist of the bottom pane's **own** anchor on the hidden
   /// translation document row (RS-24 / LD-31 / LD-32 / D11 — reuses the same
-  /// generic reading-anchor columns as the original; no schema change).
+  /// generic reading-anchor columns as the original).
   /// Independent of [_persistReadingAnchor] — never derived from / written
   /// together with the original anchor (D9).
   Future<void> _persistTranslationReadingAnchor({bool force = false}) async {
@@ -1628,14 +1710,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
     if (_isBookMode) {
       final captured = _captureBookTranslationAnchor();
-      if (captured == null) return;
-      _bookTranslationInitialScrollIndex = captured.index;
-      _bookTranslationInitialAlignment = captured.alignment;
+      // force (Hide / dispose): if the list is already unmounted, keep the
+      // last session seed so reopen still restores mid-chapter (LD-32).
+      final index = captured?.index ??
+          (force ? _bookTranslationInitialScrollIndex : null);
+      if (index == null) return;
+      final alignment = captured?.alignment ??
+          (force ? _bookTranslationInitialAlignment : null);
+      if (captured != null) {
+        _bookTranslationInitialScrollIndex = captured.index;
+        _bookTranslationInitialAlignment = captured.alignment;
+      }
       try {
         await widget.documentRepository.saveReadingAnchor(
           documentId: translationId,
-          startMs: captured.index,
-          alignment: captured.alignment,
+          startMs: index,
+          alignment: alignment,
         );
       } catch (e, st) {
         assert(() {
@@ -1647,15 +1737,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
 
     final captured = _captureTranslationCueAnchor();
-    if (captured == null) return;
-    _translationInitialScrollIndex = captured.index;
-    _translationInitialAlignment = captured.alignment;
+    final cues = _translationCues;
+    if (cues == null || cues.isEmpty) return;
+    final index = captured?.index ??
+        (force ? _translationInitialScrollIndex : null);
+    if (index == null || index < 0 || index >= cues.length) return;
+    final alignment = captured?.alignment ??
+        (force ? _translationInitialAlignment : null);
+    if (captured != null) {
+      _translationInitialScrollIndex = captured.index;
+      _translationInitialAlignment = captured.alignment;
+    }
     try {
-      final startMs = _translationCues![captured.index].startMs.toInt();
+      final startMs = cues[index].startMs.toInt();
       await widget.documentRepository.saveReadingAnchor(
         documentId: translationId,
         startMs: startMs,
-        alignment: captured.alignment,
+        alignment: alignment,
       );
     } catch (e, st) {
       assert(() {
@@ -1981,7 +2079,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
       chapters: _originalChapters,
       paneKey: const Key('readerBookPane'),
       emptyKey: const Key('readerBookEmpty'),
-      titleKeyPrefix: 'readerBookChapterTitle',
       listKey: listKey,
       listKeyPrefix: listKeyPrefix,
       prevKey: const Key('readerBookChapterPrev'),
@@ -1995,15 +2092,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// Per-pane chapter book column for original or translation (D2 / RS-13…RS-15).
   ///
-  /// D10 / D12 / RC-11 / RS-23: title + prev/next pager chrome render only on
-  /// the original (top) pane. The translation (bottom) pane is paragraph
-  /// text only, flush to the divider; its chapter index only ever changes
-  /// via the top pager (`_goToChapter`), never its own control.
+  /// D10 / D12 / D15 / RC-11 / RC-13 / RS-23: prev/next pager chrome render
+  /// only on the original (top) pane — **no** fixed `chapter.title` chrome.
+  /// The translation (bottom) pane is paragraph text only, flush to the
+  /// divider; its chapter index only ever changes via the top pager
+  /// (`_goToChapter`), never its own control.
   Widget _buildBookPaneContent({
     required List<rust_epub.EpubChapterDto> chapters,
     required Key paneKey,
     required Key emptyKey,
-    required String titleKeyPrefix,
     required Key listKey,
     required String listKeyPrefix,
     required Key prevKey,
@@ -2058,8 +2155,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     : _bookTranslationInitialAlignment)
                 .clamp(0.0, 1.0),
             // D12 / RS-23: translation pane sits flush under the divider —
-            // no extra top padding; original pane keeps its usual breathing
-            // room below the title.
+            // no extra top padding; original pane keeps light vertical inset.
             padding: fromOriginal
                 ? const EdgeInsets.symmetric(vertical: 8)
                 : const EdgeInsets.only(bottom: 8),
@@ -2107,17 +2203,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
       return KeyedSubtree(key: paneKey, child: list);
     }
 
+    // D15 / RC-01 / RC-13: no fixed chapter.title chrome above the list;
+    // pager arrows + n/N remain.
     return Column(
       key: paneKey,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text(
-            chapter.title,
-            key: Key('${titleKeyPrefix}_$index'),
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-        ),
         Expanded(child: list),
         // Bottom chapter pager — top pane only (D10 / RC-10/11).
         SafeArea(
@@ -2282,7 +2372,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
       chapters: _translationChapters!,
       paneKey: const Key('readerTranslationBookPane'),
       emptyKey: const Key('readerTranslationBookEmpty'),
-      titleKeyPrefix: 'readerTranslationBookChapterTitle',
       listKey: const Key('readerTranslationBookParagraphList'),
       listKeyPrefix: 'readerTranslationBookParagraphList',
       prevKey: const Key('readerTranslationBookChapterPrev'),

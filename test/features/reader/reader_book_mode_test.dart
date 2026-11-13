@@ -211,14 +211,20 @@ void main() {
     );
   }
 
-  testWidgets('RC-01: Show paragraphs of current chapter', (tester) async {
+  testWidgets('RC-01 / RC-13: Show paragraphs without fixed title chrome', (
+    tester,
+  ) async {
     await pumpBookReader(tester);
 
     expect(find.byKey(const Key('readerScreen')), findsOneWidget);
     expect(find.byKey(const Key('readerBookPane')), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList')), findsOneWidget);
-    expect(find.byKey(const Key('readerBookChapterTitle_0')), findsOneWidget);
-    expect(find.text('Chapter One'), findsOneWidget);
+    // D15 / RC-13: no pinned chapter.title chrome; pager remains.
+    expect(find.byKey(const Key('readerBookChapterTitle_0')), findsNothing);
+    expect(find.text('Chapter One'), findsNothing);
+    expect(find.byKey(const Key('readerBookChapterPager')), findsOneWidget);
+    expect(find.byKey(const Key('readerBookChapterPrev')), findsOneWidget);
+    expect(find.byKey(const Key('readerBookChapterNext')), findsOneWidget);
     // Paragraphs rendered via CueRow (± tokens) — find by cue keys / words.
     expect(find.byKey(const Key('readerCue_0')), findsOneWidget);
     expect(find.byKey(const Key('readerCue_1')), findsOneWidget);
@@ -235,14 +241,13 @@ void main() {
 
     expect(find.byKey(const Key('readerBookChapterPager')), findsOneWidget);
     expect(find.text('1 / 3'), findsOneWidget);
-    expect(find.text('Chapter One'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_0')), findsOneWidget);
+    expect(find.textContaining('fox'), findsWidgets);
 
     await tester.tap(find.byKey(const Key('readerBookChapterNext')));
     await tester.pumpAndSettle();
 
     expect(find.text('2 / 3'), findsOneWidget);
-    expect(find.text('Chapter Two'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_1')), findsOneWidget);
     expect(find.textContaining('rabbit'), findsOneWidget);
     expect(find.textContaining('woods'), findsNothing);
@@ -251,8 +256,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('1 / 3'), findsOneWidget);
-    expect(find.text('Chapter One'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_0')), findsOneWidget);
+    expect(find.textContaining('fox'), findsWidgets);
   });
 
   testWidgets('RC-03: Pager page count equals chapter count', (tester) async {
@@ -287,7 +292,9 @@ void main() {
       await tester.pumpAndSettle();
     }
     expect(find.text('4 / 4'), findsOneWidget);
-    expect(find.text('D'), findsOneWidget);
+    // D15: no title chrome — assert on paragraph body + pager end state.
+    expect(find.textContaining('delta'), findsOneWidget);
+    expect(find.text('D'), findsNothing);
     expect(
       tester.widget<IconButton>(
         find.byKey(const Key('readerBookChapterNext')),
@@ -445,10 +452,9 @@ void main() {
     await pumpBookReader(tester);
 
     expect(find.text('3 / 3'), findsOneWidget);
-    expect(find.text('Chapter Three'), findsOneWidget);
     expect(find.byKey(const Key('readerBookParagraphList_2')), findsOneWidget);
     expect(find.textContaining('friends'), findsOneWidget);
-    expect(find.text('Chapter One'), findsNothing);
+    expect(find.textContaining('fox'), findsNothing);
   });
 
   testWidgets('RC-06 persist: chapter index saved on pager settle', (
@@ -466,5 +472,31 @@ void main() {
     final anchor = await documents.loadReadingAnchor(doc.id);
     expect(anchor, isNotNull);
     expect(anchor!.startMs, 1);
+    // RC-12: pager rewind persists paragraph 0.
+    expect(anchor.paragraphIndex, 0);
   });
+
+  testWidgets(
+    'LD-33 / RS-12: Reopen resumes mid-chapter paragraph on original',
+    (tester) async {
+      final doc = await seedEpubDoc();
+      pumpOriginalDocumentId = doc.id;
+      // Seed second paragraph of chapter 0 — verifies initialScrollIndex wiring
+      // (LD-33). Tall-list scroll coverage lives in reader_epub_split_test.
+      pumpInitialReadingAnchor = const ReadingAnchor(
+        startMs: 0,
+        paragraphIndex: 1,
+        alignment: 0.0,
+      );
+      pumpTokenize = _tokenizeFromTexts;
+
+      await pumpBookReader(tester);
+
+      expect(find.text('1 / 3'), findsOneWidget);
+      expect(find.byKey(const Key('readerBookParagraphList_0')), findsOneWidget);
+      // Seeded mid-chapter row is built (not forced back to only index 0).
+      expect(find.byKey(const Key('readerCue_1')), findsOneWidget);
+      expect(find.textContaining('woods'), findsOneWidget);
+    },
+  );
 }

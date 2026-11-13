@@ -28,6 +28,9 @@ class Documents extends Table {
   IntColumn get lastReadStartMs => integer().nullable()();
   /// Viewport alignment of the anchor row (`itemLeadingEdge`, 0.0…1.0).
   RealColumn get lastReadAlignment => real().nullable()();
+  /// EPUB original mid-chapter paragraph index (`library/documents` LD-33).
+  /// Null on subtitle rows and on pre-schema-8 EPUB anchors (open at para 0).
+  IntColumn get lastReadParagraphIndex => integer().nullable()();
   /// Durable platform ref / bookmark for attached video (`reader/video-frames`).
   TextColumn get videoUri => text().nullable()();
   /// Optional sandbox filesystem path for extract (native content:// copy).

@@ -243,7 +243,9 @@ void main() {
     expect(find.text('TrPara 1 body'), findsOneWidget);
     expect(find.byKey(const Key('readerTranslationEmpty')), findsNothing);
     expect(find.byKey(const Key('readerBookPane')), findsOneWidget);
-    expect(find.text('Chapter 1'), findsOneWidget);
+    // D15 / RC-13: original also has no fixed title chrome; pager remains.
+    expect(find.text('Chapter 1'), findsNothing);
+    expect(find.byKey(const Key('readerBookChapterPager')), findsOneWidget);
 
     final reloaded = await documents.getById(original.id);
     expect(reloaded!.translationDocumentId, isNotNull);
@@ -379,9 +381,10 @@ void main() {
       await tester.tap(find.byKey(const Key('readerSplitToggle')));
       await tester.pumpAndSettle();
 
-      // RC-11: pager / title chrome lives only on the top pane.
+      // RC-11 / RC-13: pager lives only on the top pane; no title chrome.
       expect(find.text('1 / 3'), findsOneWidget);
-      expect(find.text('Chapter 1'), findsOneWidget);
+      expect(find.text('Chapter 1'), findsNothing);
+      expect(find.byKey(const Key('readerBookChapterPager')), findsOneWidget);
       expect(find.byKey(const Key('readerTranslationBookChapterPager')),
           findsNothing);
       expect(find.byKey(const Key('readerTranslationBookChapterNext')),
@@ -399,7 +402,7 @@ void main() {
       // RC-10: top next also moves the bottom (clamp to original); RC-12:
       // both paragraph lists rewind to the start of the new chapter.
       expect(find.text('2 / 3'), findsOneWidget);
-      expect(find.text('Chapter 2'), findsOneWidget);
+      expect(find.text('Chapter 2'), findsNothing);
       expect(find.text('TrPara 2 body'), findsOneWidget);
       expect(
         find.byKey(const Key('readerOriginalBookParagraphList_1')),
@@ -414,7 +417,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('3 / 3'), findsOneWidget);
-      expect(find.text('Chapter 3'), findsOneWidget);
+      expect(find.text('Chapter 3'), findsNothing);
       expect(find.text('TrPara 3 body'), findsOneWidget);
       expect(
         find.byKey(const Key('readerOriginalBookParagraphList_2')),
@@ -583,14 +586,14 @@ void main() {
       await _pumpFrames(tester);
 
       expect(find.text('1 / 3'), findsOneWidget);
-      expect(find.text('Chapter 1'), findsOneWidget);
+      expect(find.text('Chapter 1'), findsNothing);
       expect(find.text('TrPara 1 body'), findsOneWidget);
 
       // D10 / RC-10: only the top pager links the bottom chapter.
       await tester.tap(find.byKey(const Key('readerBookChapterNext')));
       await _pumpFrames(tester);
       expect(find.text('2 / 3'), findsOneWidget);
-      expect(find.text('Chapter 2'), findsOneWidget);
+      expect(find.text('Chapter 2'), findsNothing);
       expect(find.text('TrPara 2 body'), findsOneWidget);
     },
   );
@@ -689,7 +692,7 @@ void main() {
       // D9: freshly loaded translation starts at chapter 1 (its own
       // default) — no align to the original's current chapter (2).
       expect(find.text('2 / 3'), findsOneWidget);
-      expect(find.text('Chapter 2'), findsOneWidget);
+      expect(find.text('Chapter 2'), findsNothing);
       expect(find.text('TrPara 1 body'), findsOneWidget);
       expect(
         find.byKey(const Key('readerTranslationBookParagraphList_0')),
@@ -701,7 +704,7 @@ void main() {
       await tester.tap(find.byKey(const Key('readerBookChapterNext')));
       await _pumpFrames(tester);
       expect(find.text('3 / 3'), findsOneWidget);
-      expect(find.text('Chapter 3'), findsOneWidget);
+      expect(find.text('Chapter 3'), findsNothing);
       expect(find.text('TrPara 3 body'), findsOneWidget);
       expect(
         find.byKey(const Key('readerTranslationBookParagraphList_2')),
@@ -829,7 +832,7 @@ void main() {
     // translation at its own default chapter (1) — no align to the
     // original's current chapter (3) on load.
     expect(find.text('3 / 3'), findsOneWidget);
-    expect(find.text('Chapter 3'), findsOneWidget);
+    expect(find.text('Chapter 3'), findsNothing);
     expect(find.text('TrPara 1 body'), findsOneWidget);
     expect(
       find.byKey(const Key('readerTranslationBookParagraphList_0')),
@@ -938,7 +941,7 @@ void main() {
     await pumpBookReader(tester);
 
     expect(find.text('3 / 3'), findsOneWidget);
-    expect(find.text('Chapter 3'), findsOneWidget);
+    expect(find.text('Chapter 3'), findsNothing);
     expect(find.byKey(const Key('readerBookParagraphList_2')), findsOneWidget);
     expect(find.textContaining('Orig'), findsWidgets);
     expect(find.text('Chapter 1'), findsNothing);
@@ -963,7 +966,7 @@ void main() {
       await pumpBookReader(tester);
 
       expect(find.text('3 / 3'), findsOneWidget);
-      expect(find.text('Chapter 3'), findsOneWidget);
+      expect(find.text('Chapter 3'), findsNothing);
 
       await tester.tap(find.byKey(const Key('readerSplitToggle')));
       await tester.pumpAndSettle();
@@ -978,6 +981,53 @@ void main() {
         find.byKey(const Key('readerTranslationBookParagraphList_2')),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'LD-33 / RS-12: Original paragraph seed + bottom own restore (no sync)',
+    (tester) async {
+      // Two-paragraph chapters: both rows fit the viewport (no SPL jump hang),
+      // still proves paragraphIndex seed on original + independent bottom seed.
+      pumpOriginalChapters = _multiParaChapters(
+        chapterCount: 1,
+        paragraphCount: 2,
+        paraPrefix: 'Orig',
+      );
+      pumpTranslationChapters = _multiParaChapters(
+        chapterCount: 1,
+        paragraphCount: 3,
+        titlePrefix: 'TrChapter',
+        paraPrefix: 'Tr',
+      );
+      pumpTranslationDocumentId = 99;
+      pumpInitialReadingAnchor = const ReadingAnchor(
+        startMs: 0,
+        paragraphIndex: 1,
+        alignment: 0.0,
+      );
+      // Bottom own mid-chapter (LD-32) — distinct from original's paragraph 1.
+      pumpInitialTranslationReadingAnchor = const ReadingAnchor(
+        startMs: 2,
+        alignment: 0.0,
+      );
+      pumpTokenize = _emptyTokenize;
+
+      await pumpBookReader(tester);
+
+      expect(find.byKey(const Key('readerCue_1')), findsOneWidget);
+      expect(find.textContaining('Orig 1'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester);
+
+      expect(
+        find.byKey(const Key('readerTranslationCue_2')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Tr 2'), findsOneWidget);
+      // Not synced to original paragraph 1.
+      expect(find.byKey(const Key('readerTranslationCue_1')), findsOneWidget);
     },
   );
 
