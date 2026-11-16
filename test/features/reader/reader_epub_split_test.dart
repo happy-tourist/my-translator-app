@@ -15,6 +15,7 @@ import 'package:my_translator_app/features/reader/reader_screen.dart';
 import 'package:my_translator_app/features/reader/tokenize_cues_fn.dart';
 import 'package:my_translator_app/src/rust/api/epub.dart';
 import 'package:my_translator_app/src/rust/api/tokenize.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../support/test_database.dart';
 
@@ -49,6 +50,26 @@ List<EpubChapterDto> _multiParaChapters({
           ],
         ),
     ];
+
+/// Tall paragraphs that fill the viewport — for within-item alignment (RS-27).
+List<EpubChapterDto> _tallParaChapters({
+  int paragraphCount = 4,
+  String paraPrefix = 'Tall',
+}) {
+  final body = List.generate(
+    48,
+    (i) => 'Line $i of a tall paragraph body for within-item scroll.',
+  ).join('\n');
+  return [
+    EpubChapterDto(
+      index: 0,
+      title: 'Chapter 1',
+      paragraphs: [
+        for (var p = 0; p < paragraphCount; p++) '$paraPrefix $p\n$body',
+      ],
+    ),
+  ];
+}
 
 /// Empty tokens — avoids progressive tokenize rebuilds hanging pumpAndSettle.
 Future<List<CueTokensDto>> _emptyTokenize(List<String> texts) async => [
@@ -89,6 +110,27 @@ int _topParaIndex(
   }
   expect(bestIndex, isNotNull);
   return bestIndex!;
+}
+
+/// Top-visible SPL [ItemPosition] under [listKey] (same pick as ReaderScreen).
+ItemPosition? _topItemPosition(WidgetTester tester, {required Key listKey}) {
+  final finder = find.descendant(
+    of: find.byKey(listKey),
+    matching: find.byType(ScrollablePositionedList),
+  );
+  if (finder.evaluate().isEmpty) return null;
+  final list = tester.widget<ScrollablePositionedList>(finder.first);
+  final positions = list.itemPositionsNotifier?.itemPositions.value ?? const [];
+  ItemPosition? best;
+  for (final p in positions) {
+    if (p.itemTrailingEdge <= 0 || p.itemLeadingEdge >= 1) continue;
+    if (best == null ||
+        p.itemLeadingEdge < best.itemLeadingEdge ||
+        (p.itemLeadingEdge == best.itemLeadingEdge && p.index < best.index)) {
+      best = p;
+    }
+  }
+  return best;
 }
 
 List<TokenDto> _tokensFor(String text) {
@@ -641,6 +683,69 @@ void main() {
       expect((trAfter - trMid).abs(), lessThanOrEqualTo(15));
       // Bottom keeps its own mid — not synced to top.
       expect(trAfter, isNot(equals(0)));
+    },
+  );
+
+  testWidgets(
+    'RS-27: Show preserves within-paragraph alignment (no clamp to start)',
+    (tester) async {
+      // D18 / D18b / RS-27: tall para mid-within → leadingEdge < 0.
+      // Show must not rewind to paragraph start. Prefer pixel-invariant
+      // (leadingEdge * viewportHeight) when GlobalKey reparents State;
+      // fraction alone changes when the pane halves.
+      const paraCount = 4;
+      pumpOriginalChapters = _tallParaChapters(paragraphCount: paraCount);
+      pumpTokenize = _emptyTokenize;
+
+      await pumpBookReader(tester);
+      const singleList = Key('readerBookParagraphList');
+      const splitList = Key('readerOriginalBookParagraphList');
+
+      await tester.drag(find.byKey(singleList), const Offset(0, -900));
+      await _pumpFrames(tester, frames: 16);
+
+      final before = _topItemPosition(tester, listKey: singleList);
+      expect(before, isNotNull);
+      expect(
+        before!.itemLeadingEdge,
+        lessThan(0),
+        reason: 'precondition: mid-within tall paragraph',
+      );
+      final beforeH = tester.getRect(find.byKey(singleList)).height;
+      final beforePx = before.itemLeadingEdge * beforeH;
+
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester, frames: 24);
+
+      expect(find.byKey(splitList), findsOneWidget);
+      final after = _topItemPosition(tester, listKey: splitList);
+      expect(after, isNotNull);
+      expect(after!.index, before.index);
+      expect(
+        after.itemLeadingEdge,
+        lessThan(0),
+        reason: 'D18: must not clamp leadingEdge to 0 (paragraph start)',
+      );
+      final afterH = tester.getRect(find.byKey(splitList)).height;
+      final afterPx = after.itemLeadingEdge * afterH;
+      // D18b: same content at top ≈ same pixel offset into the item.
+      expect((afterPx - beforePx).abs(), lessThan(40));
+
+      // D18b: Hide must also reparent without clamp/jump (taller viewport).
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester, frames: 24);
+      expect(find.byKey(singleList), findsOneWidget);
+      final afterHide = _topItemPosition(tester, listKey: singleList);
+      expect(afterHide, isNotNull);
+      expect(afterHide!.index, before.index);
+      expect(
+        afterHide.itemLeadingEdge,
+        lessThan(0),
+        reason: 'D18b Hide: must not clamp leadingEdge to 0',
+      );
+      final hideH = tester.getRect(find.byKey(singleList)).height;
+      final hidePx = afterHide.itemLeadingEdge * hideH;
+      expect((hidePx - beforePx).abs(), lessThan(40));
     },
   );
 

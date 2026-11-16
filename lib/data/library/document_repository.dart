@@ -25,7 +25,7 @@ class ReadingAnchor {
   /// Subtitle cue start ms, or EPUB chapter/paragraph index (see class docs).
   final int startMs;
 
-  /// Optional `itemLeadingEdge` in `0.0…1.0` (cue list or paragraph list).
+  /// Optional SPL `itemLeadingEdge` (may be <0 / >1 for tall items — D18).
   final double? alignment;
 
   /// EPUB original mid-chapter paragraph index (LD-33); null when unset.
@@ -282,12 +282,13 @@ class DocumentRepository {
     double? alignment,
     int? paragraphIndex,
   }) async {
-    final clampedAlignment = alignment?.clamp(0.0, 1.0);
+    // D18: keep raw SPL itemLeadingEdge (may be <0 or >1 for tall items).
+    // clamp(0,1) would persist paragraph-start and reopen mid-within as 0.
     await (_db.update(_db.documents)..where((d) => d.id.equals(documentId)))
         .write(
           DocumentsCompanion(
             lastReadStartMs: Value(startMs),
-            lastReadAlignment: Value(clampedAlignment?.toDouble()),
+            lastReadAlignment: Value(alignment),
             lastReadParagraphIndex: Value(paragraphIndex),
             updatedAt: Value(DateTime.now()),
           ),

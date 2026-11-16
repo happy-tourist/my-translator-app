@@ -273,6 +273,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// (attach at ~40 + tokenize later must not race a 48-only clear).
   static const int _kBookRemountTokenizeHoldFrames = 32;
 
+  /// Stable [GlobalKey] for the original EPUB [ScrollablePositionedList] so
+  /// Show/Hide can reparent State (pixel scroll) without jumpTo (D18b).
+  /// Recreated only when chapter index or [_bookParagraphListGeneration]
+  /// changes (pager rewind / RC-14).
+  String? _bookOriginalSplKeyId;
+  GlobalKey? _bookOriginalSplGlobalKey;
+
+  /// Cached [GlobalKey] for original book SPL (D18b). New instance only when
+  /// [chapterIndex] or [_bookParagraphListGeneration] changes.
+  GlobalKey _bookOriginalSplKeyFor(int chapterIndex) {
+    final id = '${chapterIndex}_$_bookParagraphListGeneration';
+    if (_bookOriginalSplKeyId != id || _bookOriginalSplGlobalKey == null) {
+      _bookOriginalSplKeyId = id;
+      _bookOriginalSplGlobalKey = GlobalKey(
+        debugLabel: 'bookOrigSpl_$id',
+      );
+    }
+    return _bookOriginalSplGlobalKey!;
+  }
+
   ParseSubtitlesFn get _parse =>
       widget.parseSubtitles ?? rust_parse.parseSubtitles;
 
@@ -348,8 +368,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           final p = anchor?.paragraphIndex ?? 0;
           _bookOriginalInitialScrollIndex =
               p.clamp(0, paragraphs.length - 1);
-          _bookOriginalInitialAlignment =
-              (anchor?.alignment ?? 0.0).clamp(0.0, 1.0);
+          // D18: raw leadingEdge (may be <0); do not clamp to [0,1].
+          _bookOriginalInitialAlignment = anchor?.alignment ?? 0.0;
         }
       }
       // LD-32 / D10: the translation pane has no pager of its own — its
@@ -423,8 +443,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (paragraphs.isEmpty) return;
       _bookTranslationInitialScrollIndex =
           saved.startMs.clamp(0, paragraphs.length - 1);
-      _bookTranslationInitialAlignment =
-          (saved.alignment ?? 0.0).clamp(0.0, 1.0);
+      // D18: raw leadingEdge (may be <0); do not clamp to [0,1].
+      _bookTranslationInitialAlignment = saved.alignment ?? 0.0;
       return;
     }
 
@@ -433,7 +453,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final index = nearestCueIndex(cues, BigInt.from(saved.startMs));
     if (index < 0) return;
     _translationInitialScrollIndex = index;
-    _translationInitialAlignment = (saved.alignment ?? 0.0).clamp(0.0, 1.0);
+    // D18: raw leadingEdge (may be <0); do not clamp to [0,1].
+    _translationInitialAlignment = saved.alignment ?? 0.0;
   }
 
   @override
@@ -1434,9 +1455,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
       // seed with 0 (would jumpTo chapter start after remount).
       final restoreIndex =
           (anchor?.index ?? _bookOriginalInitialScrollIndex).clamp(0, maxIndex);
-      final restoreAlignment = (anchor?.itemLeadingEdge ??
-              _bookOriginalInitialAlignment)
-          .clamp(0.0, 1.0);
+      // D18 / RS-27: keep raw itemLeadingEdge (often <0 mid-within tall para).
+      // clamp(0,1) would rewind Show/Hide to the paragraph start.
+      final restoreAlignment =
+          anchor?.itemLeadingEdge ?? _bookOriginalInitialAlignment;
 
       // RS-11 / RS-24: capture the bottom's own position before Hide
       // disposes its list; Show later restores it from this session seed.
@@ -1465,20 +1487,48 @@ class _ReaderScreenState extends State<ReaderScreen> {
         unawaited(_persistTranslationReadingAnchor(force: true));
       }
 
-      // D17: wait for attach (+ layout), double post-frame; do not give up
-      // after ~8 frames. Show restores bottom's OWN seed — never sync.
-      _scheduleBookPaneRemountRestore(
-        controller: _bookOriginalScrollController,
-        positions: _bookOriginalPositions,
-        index: restoreIndex,
-        alignment: restoreAlignment,
-        epoch: restoreEpoch,
-        stillValid: () => paragraphs.isNotEmpty,
-        userScrolled: () => _bookRemountUserScrolledOriginal,
-      );
-      if (enabling) {
-        _restoreTranslationBookScroll(epoch: restoreEpoch);
-      }
+      // D18b: original SPL uses a stable GlobalKey across single↔split so
+      // State (pixel scroll) often survives the tree move. jumpTo with the
+      // same leadingEdge fraction on a shorter viewport shifts toward the
+      // paragraph start — skip original jump when still attached.
+      // D17: if State was lost, wait for attach (+ layout) and restore.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || restoreEpoch != _bookRemountRestoreEpoch) return;
+        final originalPreserved = _bookOriginalScrollController.isAttached;
+        if (originalPreserved) {
+          // Skip original remount jump + tokenize re-apply for this pane.
+          _bookRemountUserScrolledOriginal = true;
+          // After viewport resize, fraction ≠ pre-Show seed; refresh from
+          // live positions so force persist / Hide fallback matches pixels.
+          void refreshOriginalSeedFromLive() {
+            if (!mounted || restoreEpoch != _bookRemountRestoreEpoch) return;
+            final live = _captureBookOriginalAnchor();
+            if (live == null) return;
+            _bookOriginalInitialScrollIndex = live.index;
+            _bookOriginalInitialAlignment = live.alignment;
+          }
+
+          refreshOriginalSeedFromLive();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            refreshOriginalSeedFromLive();
+          });
+        } else {
+          _scheduleBookPaneRemountRestore(
+            controller: _bookOriginalScrollController,
+            positions: _bookOriginalPositions,
+            index: restoreIndex,
+            alignment: restoreAlignment,
+            epoch: restoreEpoch,
+            stillValid: () => paragraphs.isNotEmpty,
+            userScrolled: () => _bookRemountUserScrolledOriginal,
+          );
+        }
+        if (enabling) {
+          _restoreTranslationBookScroll(epoch: restoreEpoch);
+        } else if (originalPreserved) {
+          _bookRemountRestorePending = false;
+        }
+      });
       // Hold pending for slow Android attach + late tokenize (D17 D/F).
       _scheduleClearBookRemountRestorePending(
         restoreEpoch,
@@ -1502,8 +1552,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       0,
       widget.originalCues.isEmpty ? 0 : widget.originalCues.length - 1,
     );
+    // D18: raw itemLeadingEdge — do not clamp to [0,1].
     final restoreAlignment =
-        (anchor?.itemLeadingEdge ?? _originalInitialAlignment).clamp(0.0, 1.0);
+        anchor?.itemLeadingEdge ?? _originalInitialAlignment;
 
     // RS-11 / RS-24: capture the bottom's own position before Hide disposes
     // its list (independent of any video page on the original pane).
@@ -1735,7 +1786,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       BigInt.from(saved.startMs),
     );
     if (index < 0) return;
-    final alignment = (saved.alignment ?? 0.0).clamp(0.0, 1.0);
+    // D18: raw alignment from Drift (may be <0); do not clamp to [0,1].
+    final alignment = saved.alignment ?? 0.0;
     // RS-12 / D9: original only; translation restores its own anchor
     // independently (no sync between panes).
     _originalScrollController.jumpTo(index: index, alignment: alignment);
@@ -1785,13 +1837,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (index == null || index < 0 || index >= widget.originalCues.length) {
       return;
     }
-    final alignment = (top?.itemLeadingEdge ??
-            (force ? _originalInitialAlignment : null))
-        ?.clamp(0.0, 1.0);
+    // D18: raw itemLeadingEdge — do not clamp to [0,1].
+    final alignment =
+        top?.itemLeadingEdge ?? (force ? _originalInitialAlignment : null);
     if (alignment == null) return;
     if (top != null) {
       _originalInitialScrollIndex = top.index;
-      _originalInitialAlignment = top.itemLeadingEdge.clamp(0.0, 1.0);
+      _originalInitialAlignment = top.itemLeadingEdge;
     }
 
     // Best-effort: fail MUST NOT block UI (D10). Whole body in try (incl. toInt).
@@ -1819,7 +1871,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (top == null) return null;
     return (
       index: top.index.clamp(0, cues.length - 1),
-      alignment: top.itemLeadingEdge.clamp(0.0, 1.0),
+      // D18: raw leadingEdge (may be <0); do not clamp to [0,1].
+      alignment: top.itemLeadingEdge,
     );
   }
 
@@ -1834,7 +1887,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
         chapter.paragraphs.isEmpty ? 0 : chapter.paragraphs.length - 1;
     return (
       index: top.index.clamp(0, maxIndex),
-      alignment: top.itemLeadingEdge.clamp(0.0, 1.0),
+      // D18: raw leadingEdge (may be <0); do not clamp to [0,1].
+      alignment: top.itemLeadingEdge,
     );
   }
 
@@ -1851,7 +1905,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
         chapter.paragraphs.isEmpty ? 0 : chapter.paragraphs.length - 1;
     return (
       index: top.index.clamp(0, maxIndex),
-      alignment: top.itemLeadingEdge.clamp(0.0, 1.0),
+      // D18: raw leadingEdge (may be <0); do not clamp to [0,1].
+      alignment: top.itemLeadingEdge,
     );
   }
 
@@ -2101,8 +2156,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // (sheet / keyboard restore path).
     return (
       index: (anchor?.index ?? _originalInitialScrollIndex).clamp(0, maxIndex),
-      alignment: (anchor?.itemLeadingEdge ?? _originalInitialAlignment)
-          .clamp(0.0, 1.0),
+      // D18: raw leadingEdge (may be <0); do not clamp to [0,1].
+      alignment: anchor?.itemLeadingEdge ?? _originalInitialAlignment,
     );
   }
 
@@ -2202,7 +2257,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (top == null || widget.originalCues.isEmpty) return;
       _originalInitialScrollIndex =
           top.index.clamp(0, widget.originalCues.length - 1);
-      _originalInitialAlignment = top.itemLeadingEdge.clamp(0.0, 1.0);
+      // D18: raw leadingEdge — do not clamp to [0,1].
+      _originalInitialAlignment = top.itemLeadingEdge;
     } else {
       final captured = _captureTranslationCueAnchor();
       if (captured == null) return;
@@ -2278,10 +2334,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// EPUB book pane: paragraph list + bottom chapter pager (RC-01…RC-04).
   ///
-  /// [split] uses distinct list Keys / prefixes (like subtitle `readerCueList`
-  /// vs `readerOriginalCueList`). Book lists themselves use ValueKey +
-  /// [_bookParagraphListGeneration] (not PageStorageKey) so Show/Hide seed and
-  /// pager rewind stay authoritative (RS-10/11, D16 B / RC-14).
+  /// [split] uses distinct finder Keys / prefixes (like subtitle
+  /// `readerCueList` vs `readerOriginalCueList`). Original book SPL uses a
+  /// cached [GlobalKey] (D18b); translation uses ValueKey +
+  /// [_bookParagraphListGeneration] (not PageStorageKey) so pager rewind
+  /// stays authoritative (RS-10/11, D16 B / RC-14).
   Widget _buildBookPane({bool split = false}) {
     final listKey = split
         ? const Key('readerOriginalBookParagraphList')
@@ -2349,12 +2406,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
           // Finder / RC-02 remount identity (ValueKey).
           key: Key('${listKeyPrefix}_$index'),
           child: ScrollablePositionedList.builder(
-            // D16 B / RC-14: ValueKey + generation (not PageStorageKey) so
-            // revisiting a chapter cannot restore a prior mid-chapter offset.
-            // Single↔split still use distinct [listKeyPrefix] (RS-10/11).
-            key: ValueKey<String>(
-              '${listKeyPrefix}_${index}_$_bookParagraphListGeneration',
-            ),
+            // D16 B / RC-14: remount when chapter/generation changes so
+            // revisit cannot keep a prior mid offset (not PageStorageKey).
+            // D18b: original uses a cached [GlobalKey] (same instance across
+            // single↔split) so State/pixel scroll reparents without jumpTo.
+            // Translation keeps ValueKey + its listKeyPrefix (Show mounts it).
+            key: fromOriginal
+                ? _bookOriginalSplKeyFor(index)
+                : ValueKey<String>(
+                    '${listKeyPrefix}_${index}_$_bookParagraphListGeneration',
+                  ),
             itemScrollController: fromOriginal
                 ? _bookOriginalScrollController
                 : _bookTranslationScrollController,
@@ -2367,10 +2428,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ? _bookOriginalInitialScrollIndex
                     : _bookTranslationInitialScrollIndex)
                 .clamp(0, displayCues.isEmpty ? 0 : displayCues.length - 1),
-            initialAlignment: (fromOriginal
-                    ? _bookOriginalInitialAlignment
-                    : _bookTranslationInitialAlignment)
-                .clamp(0.0, 1.0),
+            // D18: raw session alignment (may be <0); do not clamp to [0,1].
+            initialAlignment: fromOriginal
+                ? _bookOriginalInitialAlignment
+                : _bookTranslationInitialAlignment,
             // D12 / RS-23: translation pane sits flush under the divider —
             // no extra top padding; original pane keeps light vertical inset.
             padding: fromOriginal
@@ -2837,10 +2898,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ? _originalInitialScrollIndex
             : _translationInitialScrollIndex)
         .clamp(0, maxIndex);
-    final initialAlignment = (fromOriginal
-            ? _originalInitialAlignment
-            : _translationInitialAlignment)
-        .clamp(0.0, 1.0);
+    // D18: raw session alignment (may be <0); do not clamp to [0,1].
+    final initialAlignment = fromOriginal
+        ? _originalInitialAlignment
+        : _translationInitialAlignment;
 
     return NotificationListener<ScrollNotification>(
       onNotification: (n) =>

@@ -848,6 +848,32 @@ void main() {
       expect(row!.lastReadStartMs, 2);
       expect(row.lastReadParagraphIndex, 7);
       expect(row.lastReadAlignment, closeTo(0.35, 1e-9));
+
+      // D18 / D18c: mid-within tall para → leadingEdge < 0 must round-trip
+      // (no clamp) for original and translation rows.
+      await documents.saveReadingAnchor(
+        documentId: original.id,
+        startMs: 2,
+        paragraphIndex: 7,
+        alignment: -1.25,
+      );
+      final within = await documents.loadReadingAnchor(original.id);
+      expect(within!.alignment, closeTo(-1.25, 1e-9));
+      expect(within.paragraphIndex, 7);
+
+      final translation = await documents.importIntoFolder(
+        folderId: folder.id,
+        fileName: 'novel.ru.epub',
+        bytes: _epubLikeBytes(),
+      );
+      await documents.saveReadingAnchor(
+        documentId: translation.id,
+        startMs: 7,
+        alignment: -0.85,
+      );
+      final bottom = await documents.loadReadingAnchor(translation.id);
+      expect(bottom!.alignment, closeTo(-0.85, 1e-9));
+      expect(bottom.startMs, 7);
     },
   );
 }

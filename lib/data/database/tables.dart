@@ -26,7 +26,8 @@ class Documents extends Table {
       integer().nullable().references(Documents, #id)();
   /// Last reading position on the original (`library/documents` LD-17): cue start ms.
   IntColumn get lastReadStartMs => integer().nullable()();
-  /// Viewport alignment of the anchor row (`itemLeadingEdge`, 0.0…1.0).
+  /// Viewport alignment of the anchor row (SPL `itemLeadingEdge`; may be
+  /// outside `0…1` for tall items — D18).
   RealColumn get lastReadAlignment => real().nullable()();
   /// EPUB original mid-chapter paragraph index (`library/documents` LD-33).
   /// Null on subtitle rows and on pre-schema-8 EPUB anchors (open at para 0).
