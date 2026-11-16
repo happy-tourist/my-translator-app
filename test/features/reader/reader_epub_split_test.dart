@@ -446,7 +446,7 @@ void main() {
     const singleList = Key('readerBookParagraphList');
     const splitList = Key('readerOriginalBookParagraphList');
     await tester.drag(find.byKey(singleList), const Offset(0, -2500));
-    await _pumpFrames(tester);
+    await _pumpFrames(tester, frames: 12);
 
     final anchorIndex = _topParaIndex(
       tester,
@@ -457,7 +457,8 @@ void main() {
     expect(anchorIndex, greaterThan(0));
 
     await tester.tap(find.byKey(const Key('readerSplitToggle')));
-    await _pumpFrames(tester);
+    // D17: extra pumps for slow attach/layout (avoid pumpAndSettle + SPL).
+    await _pumpFrames(tester, frames: 24);
 
     expect(find.byKey(splitList), findsOneWidget);
     expect(find.byKey(Key('readerCue_$anchorIndex')), findsOneWidget);
@@ -536,7 +537,7 @@ void main() {
       const splitList = Key('readerOriginalBookParagraphList');
 
       await tester.drag(find.byKey(singleList), const Offset(0, -2500));
-      await _pumpFrames(tester);
+      await _pumpFrames(tester, frames: 12);
       final mid = _topParaIndex(
         tester,
         listKey: singleList,
@@ -545,13 +546,13 @@ void main() {
       );
       expect(mid, greaterThan(0));
 
-      // Show → Hide → Show remounts single↔split keys twice (D16 A).
+      // Show → Hide → Show remounts single↔split keys twice (D16 A / D17).
       await tester.tap(find.byKey(const Key('readerSplitToggle')));
-      await _pumpFrames(tester);
+      await _pumpFrames(tester, frames: 24);
       await tester.tap(find.byKey(const Key('readerSplitToggle')));
-      await _pumpFrames(tester);
+      await _pumpFrames(tester, frames: 24);
       await tester.tap(find.byKey(const Key('readerSplitToggle')));
-      await _pumpFrames(tester);
+      await _pumpFrames(tester, frames: 24);
 
       expect(find.byKey(splitList), findsOneWidget);
       final after = _topParaIndex(
@@ -562,6 +563,84 @@ void main() {
       );
       expect(after, greaterThan(0));
       expect((after - mid).abs(), lessThanOrEqualTo(15));
+    },
+  );
+
+  testWidgets(
+    'RS-26: Hide→Show keeps both EPUB panes mid-chapter',
+    (tester) async {
+      // D17 / RS-26: both mid → Hide → Show → both still mid (own seeds).
+      const paraCount = 40;
+      pumpOriginalChapters = _multiParaChapters(
+        chapterCount: 1,
+        paragraphCount: paraCount,
+        paraPrefix: 'Orig',
+      );
+      pumpTranslationChapters = _multiParaChapters(
+        chapterCount: 1,
+        paragraphCount: paraCount,
+        titlePrefix: 'TrChapter',
+        paraPrefix: 'Tr',
+      );
+      pumpTranslationDocumentId = 99;
+      pumpTokenize = _emptyTokenize;
+
+      await pumpBookReader(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester, frames: 24);
+
+      const origList = Key('readerOriginalBookParagraphList');
+      const trList = Key('readerTranslationBookParagraphList');
+      expect(find.byKey(origList), findsOneWidget);
+      expect(find.byKey(trList), findsOneWidget);
+
+      await tester.drag(find.byKey(origList), const Offset(0, -2500));
+      await _pumpFrames(tester, frames: 12);
+      await tester.drag(find.byKey(trList), const Offset(0, -1800));
+      await _pumpFrames(tester, frames: 12);
+
+      final origMid = _topParaIndex(
+        tester,
+        listKey: origList,
+        keyPrefix: 'readerCue',
+        paragraphCount: paraCount,
+      );
+      final trMid = _topParaIndex(
+        tester,
+        listKey: trList,
+        keyPrefix: 'readerTranslationCue',
+        paragraphCount: paraCount,
+      );
+      expect(origMid, greaterThan(0));
+      expect(trMid, greaterThan(0));
+
+      // Hide → Show remounts both panes (D17).
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester, frames: 24);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester, frames: 24);
+
+      expect(find.byKey(origList), findsOneWidget);
+      expect(find.byKey(trList), findsOneWidget);
+
+      final origAfter = _topParaIndex(
+        tester,
+        listKey: origList,
+        keyPrefix: 'readerCue',
+        paragraphCount: paraCount,
+      );
+      final trAfter = _topParaIndex(
+        tester,
+        listKey: trList,
+        keyPrefix: 'readerTranslationCue',
+        paragraphCount: paraCount,
+      );
+      expect(origAfter, greaterThan(0));
+      expect(trAfter, greaterThan(0));
+      expect((origAfter - origMid).abs(), lessThanOrEqualTo(15));
+      expect((trAfter - trMid).abs(), lessThanOrEqualTo(15));
+      // Bottom keeps its own mid — not synced to top.
+      expect(trAfter, isNot(equals(0)));
     },
   );
 

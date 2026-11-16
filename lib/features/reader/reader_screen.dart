@@ -256,6 +256,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
   final _bookOriginalPositions = ItemPositionsListener.create();
   final _bookTranslationPositions = ItemPositionsListener.create();
 
+  /// D17: Show/Hide remount restore window — tokenize setState may wipe
+  /// scroll after the first jumpTo; re-apply seeds while pending.
+  var _bookRemountRestoreEpoch = 0;
+  var _bookRemountRestorePending = false;
+
+  /// D17 / expectation 4: once the user scrolls a pane during remount
+  /// restore, stop programmatic re-jump on **that** pane only.
+  var _bookRemountUserScrolledOriginal = false;
+  var _bookRemountUserScrolledTranslation = false;
+
+  /// Android remount can attach/layout well after 8 frames; keep retrying.
+  static const int _kBookRemountRestoreMaxAttempts = 48;
+
+  /// Extra frames after max attach wait so late tokenize can still re-apply
+  /// (attach at ~40 + tokenize later must not race a 48-only clear).
+  static const int _kBookRemountTokenizeHoldFrames = 32;
+
   ParseSubtitlesFn get _parse =>
       widget.parseSubtitles ?? rust_parse.parseSubtitles;
 
@@ -537,6 +554,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _cueTokensByIndex = hit.tokens;
         _tokenizeReady = true;
       });
+      _reapplyBookSeedsAfterTokenizeIfRemounting();
       if (!hit.markReady) {
         await _markBookChapterTokens(
           chapterIndex: chapterIndex,
@@ -553,6 +571,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _cueTokensByIndex = const [];
         _tokenizeReady = true;
       });
+      _reapplyBookSeedsAfterTokenizeIfRemounting();
       _chapterTokenCache[chapterIndex] = const _ChapterTokenCache(
         tokens: [],
         markReady: true,
@@ -573,6 +592,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _cueTokensByIndex = working;
         _tokenizeReady = true;
       });
+      _reapplyBookSeedsAfterTokenizeIfRemounting();
 
       // Phase 2: remainder after a frame / idle yield (D12).
       if (prefixLen < texts.length) {
@@ -601,6 +621,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         setState(() {
           _cueTokensByIndex = working;
         });
+        _reapplyBookSeedsAfterTokenizeIfRemounting();
       }
 
       // Cache tokenize before mark so pager return is a hit even if mark lags.
@@ -651,6 +672,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _cueTokensByIndex = normalized;
         _tokenizeReady = true;
       });
+      _reapplyBookSeedsAfterTokenizeIfRemounting();
       _chapterTokenCache[chapterIndex] = _ChapterTokenCache(
         tokens: normalized,
         markReady: true,
@@ -1421,6 +1443,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
       final capturedTranslation =
           !enabling ? _captureBookTranslationAnchor() : null;
 
+      final restoreEpoch = ++_bookRemountRestoreEpoch;
+      _bookRemountRestorePending = true;
+      _bookRemountUserScrolledOriginal = false;
+      _bookRemountUserScrolledTranslation = false;
+
       setState(() {
         _bookOriginalInitialScrollIndex = restoreIndex;
         _bookOriginalInitialAlignment = restoreAlignment;
@@ -1438,30 +1465,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
         unawaited(_persistTranslationReadingAnchor(force: true));
       }
 
-      // Remount may attach a frame later; retry like cue restore.
-      void restoreOriginalBookScroll({int attempt = 0}) {
-        if (!mounted || paragraphs.isEmpty) return;
-        if (!_bookOriginalScrollController.isAttached) {
-          if (attempt >= 8) return;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            restoreOriginalBookScroll(attempt: attempt + 1);
-          });
-          return;
-        }
-        _bookOriginalScrollController.jumpTo(
-          index: restoreIndex,
-          alignment: restoreAlignment,
-        );
+      // D17: wait for attach (+ layout), double post-frame; do not give up
+      // after ~8 frames. Show restores bottom's OWN seed — never sync.
+      _scheduleBookPaneRemountRestore(
+        controller: _bookOriginalScrollController,
+        positions: _bookOriginalPositions,
+        index: restoreIndex,
+        alignment: restoreAlignment,
+        epoch: restoreEpoch,
+        stillValid: () => paragraphs.isNotEmpty,
+        userScrolled: () => _bookRemountUserScrolledOriginal,
+      );
+      if (enabling) {
+        _restoreTranslationBookScroll(epoch: restoreEpoch);
       }
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        restoreOriginalBookScroll();
-        // Show: restore the bottom's own seeded/saved anchor (D9) — no
-        // sync to the original.
-        if (enabling) {
-          _restoreTranslationBookScroll();
-        }
-      });
+      // Hold pending for slow Android attach + late tokenize (D17 D/F).
+      _scheduleClearBookRemountRestorePending(
+        restoreEpoch,
+        holdFrames:
+            _kBookRemountRestoreMaxAttempts + _kBookRemountTokenizeHoldFrames,
+      );
       return;
     }
 
@@ -1545,21 +1568,135 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  /// Show: jump the bottom paragraph list to its own seed, retrying while
-  /// the scroll controller is not attached yet (same pattern as cue restore).
-  void _restoreTranslationBookScroll({int attempt = 0}) {
+  /// Show: jump the bottom paragraph list to its own seed (D9 / D17) —
+  /// hardened attach wait + double post-frame; never derived from top.
+  void _restoreTranslationBookScroll({int? epoch}) {
     if (!mounted || !_splitEnabled || !_hasTranslationChapters) return;
-    if (!_bookTranslationScrollController.isAttached) {
-      if (attempt >= 8) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _restoreTranslationBookScroll(attempt: attempt + 1);
-      });
-      return;
-    }
-    _bookTranslationScrollController.jumpTo(
+    final restoreEpoch = epoch ?? _bookRemountRestoreEpoch;
+    _scheduleBookPaneRemountRestore(
+      controller: _bookTranslationScrollController,
+      positions: _bookTranslationPositions,
       index: _bookTranslationInitialScrollIndex,
       alignment: _bookTranslationInitialAlignment,
+      epoch: restoreEpoch,
+      stillValid: () => _splitEnabled && _hasTranslationChapters,
+      userScrolled: () => _bookRemountUserScrolledTranslation,
     );
+  }
+
+  /// D17: wait until [controller] is attached and has laid out at least one
+  /// item (or attempts exhausted), then jumpTo seed and re-apply on the next
+  /// two frames so split pane size / tokenize rebuild cannot leave para 0.
+  void _scheduleBookPaneRemountRestore({
+    required ItemScrollController controller,
+    required ItemPositionsListener positions,
+    required int index,
+    required double alignment,
+    required int epoch,
+    required bool Function() stillValid,
+    required bool Function() userScrolled,
+  }) {
+    void runRestore({int frame = 0, int reapplyPass = 0}) {
+      if (!mounted ||
+          epoch != _bookRemountRestoreEpoch ||
+          !stillValid()) {
+        return;
+      }
+      // User already moved this pane — do not fight (D17 expectation 4).
+      if (userScrolled()) {
+        return;
+      }
+      final attached = controller.isAttached;
+      final layoutReady =
+          attached && positions.itemPositions.value.isNotEmpty;
+      if (!attached ||
+          (!layoutReady && frame < _kBookRemountRestoreMaxAttempts)) {
+        if (frame >= _kBookRemountRestoreMaxAttempts) {
+          // Last resort: jump if attached even without positions yet,
+          // then still double post-frame (D17 E).
+          if (attached) {
+            controller.jumpTo(index: index, alignment: alignment);
+            if (reapplyPass < 2) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                runRestore(frame: frame, reapplyPass: reapplyPass + 1);
+              });
+            }
+          }
+          return;
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          runRestore(frame: frame + 1, reapplyPass: reapplyPass);
+        });
+        return;
+      }
+      controller.jumpTo(index: index, alignment: alignment);
+      // Double post-frame re-restore (sheet pattern / D17 E).
+      if (reapplyPass < 2) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          runRestore(frame: frame, reapplyPass: reapplyPass + 1);
+        });
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      runRestore();
+    });
+  }
+
+  void _scheduleClearBookRemountRestorePending(
+    int epoch, {
+    int holdFrames = 0,
+  }) {
+    void tick({required int left}) {
+      if (!mounted || epoch != _bookRemountRestoreEpoch) return;
+      if (left <= 0) {
+        if (epoch == _bookRemountRestoreEpoch) {
+          _bookRemountRestorePending = false;
+        }
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        tick(left: left - 1);
+      });
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      tick(left: holdFrames);
+    });
+  }
+
+  /// D17 F: tokenize/mark setState can rebuild CueRows and wipe scroll after
+  /// Show/Hide remount — re-apply each pane's own session seed if attached.
+  void _reapplyBookSeedsAfterTokenizeIfRemounting() {
+    if (!_bookRemountRestorePending) return;
+    if (_bookRemountUserScrolledOriginal &&
+        _bookRemountUserScrolledTranslation) {
+      return;
+    }
+    final epoch = _bookRemountRestoreEpoch;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_bookRemountRestorePending ||
+          epoch != _bookRemountRestoreEpoch) {
+        return;
+      }
+      if (!_bookRemountUserScrolledOriginal &&
+          _bookOriginalScrollController.isAttached) {
+        _bookOriginalScrollController.jumpTo(
+          index: _bookOriginalInitialScrollIndex,
+          alignment: _bookOriginalInitialAlignment,
+        );
+      }
+      if (!_bookRemountUserScrolledTranslation &&
+          _splitEnabled &&
+          _hasTranslationChapters &&
+          _bookTranslationScrollController.isAttached) {
+        _bookTranslationScrollController.jumpTo(
+          index: _bookTranslationInitialScrollIndex,
+          alignment: _bookTranslationInitialAlignment,
+        );
+      }
+    });
   }
 
   void _restoreInitialReadingAnchor({int attempt = 0}) {
@@ -2004,6 +2141,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _originalUserInitiatedScroll = true;
       } else {
         _translationUserInitiatedScroll = true;
+      }
+      // D17 expectation 4: user gesture wins over remount re-restore
+      // on the pane that scrolled (not the sibling).
+      if (_isBookMode && _bookRemountRestorePending) {
+        if (fromOriginal) {
+          _bookRemountUserScrolledOriginal = true;
+        } else {
+          _bookRemountUserScrolledTranslation = true;
+        }
       }
     }
     if (notification is! ScrollEndNotification) return false;
