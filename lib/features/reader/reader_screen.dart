@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show AnyhowException, PanicException;
@@ -170,7 +171,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// [_bookDividerRatio] (D13 / RS-17).
   var _dividerRatio = 0.5;
   final ValueNotifier<double> _bookDividerRatio = ValueNotifier(0.5);
-  var _userInitiatedScroll = false;
+  /// Per-pane: shared flag would drop the second pane's settle persist when
+  /// both lists scroll before either ScrollEnd (D16 C).
+  var _originalUserInitiatedScroll = false;
+  var _translationUserInitiatedScroll = false;
   var _loadingTranslation = false;
   var _loadingVideo = false;
   var _didRestoreInitialAnchor = false;
@@ -184,6 +188,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// Reset to 0 on chapter pager (RC-02).
   var _bookOriginalInitialScrollIndex = 0;
   var _bookOriginalInitialAlignment = 0.0;
+
+  /// Bumped on every [_goToChapter] so book list keys discard PageStorage /
+  /// prior mid-chapter offsets when revisiting a chapter (D16 B / RC-12/14).
+  var _bookParagraphListGeneration = 0;
 
   /// Translation (bottom) pane's own seed — Show/Hide remount, Load, and
   /// reopen restore (D9 / RS-11 / RS-24). Never derived from the original
@@ -913,6 +921,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       // RC-02/RC-12: remount starts at paragraph 0 — clear preserve seed.
       _bookOriginalInitialScrollIndex = 0;
       _bookOriginalInitialAlignment = 0.0;
+      // D16 B / RC-14: invalidate prior PageStorage / list identity so a
+      // revisit cannot restore the old mid-chapter offset.
+      _bookParagraphListGeneration++;
       _clearSelection(updateState: false);
       // RC-09: restore from session cache when available; else clear until batch.
       final cached = _chapterTokenCache[clamped];
@@ -937,13 +948,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _bookTranslationInitialAlignment = 0.0;
       }
     });
-    // ListView key includes chapter index → remount resets scroll to start (RC-02).
+    // ListView key includes chapter index + generation → remount at 0 (RC-02).
     // Cache hit still runs through _runBookChapterTokenize for optional re-mark.
     unawaited(_runBatchTokenize());
     // Persist chapter + paragraph 0 explicitly (LD-28 / RC-12). Do not call
     // `_persistReadingAnchor` here — the old list may still be attached for a
     // frame and would re-capture the previous mid-chapter index.
     unawaited(_persistBookChapterAnchor(chapterIndex: clamped, paragraphIndex: 0));
+    // D16 B / RC-14: generation key + initialScrollIndex 0 remount both panes
+    // at chapter start. Avoid post-frame jumpTo(0) — races tokenize and hangs
+    // widget tests (same SPL caveat as open restore).
   }
 
   /// Writes EPUB original chapter (+ optional mid-chapter paragraph) without
@@ -1394,9 +1408,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
       final paragraphs = _currentChapterParagraphs;
       final anchor = _topVisible(_bookOriginalPositions);
       final maxIndex = paragraphs.isEmpty ? 0 : paragraphs.length - 1;
-      final restoreIndex = (anchor?.index ?? 0).clamp(0, maxIndex);
-      final restoreAlignment =
-          (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
+      // D16 A / RS-25: empty capture MUST NOT overwrite a mid-chapter session
+      // seed with 0 (would jumpTo chapter start after remount).
+      final restoreIndex =
+          (anchor?.index ?? _bookOriginalInitialScrollIndex).clamp(0, maxIndex);
+      final restoreAlignment = (anchor?.itemLeadingEdge ??
+              _bookOriginalInitialAlignment)
+          .clamp(0.0, 1.0);
 
       // RS-11 / RS-24: capture the bottom's own position before Hide
       // disposes its list; Show later restores it from this session seed.
@@ -1456,12 +1474,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
             _videoCurrentSecond)
         : null;
     final anchor = _hasVideo ? null : _topVisible(_originalPositions);
-    final restoreIndex = (anchor?.index ?? 0).clamp(
+    // D16 A: keep session seed when capture is empty (same as book path).
+    final restoreIndex = (anchor?.index ?? _originalInitialScrollIndex).clamp(
       0,
       widget.originalCues.isEmpty ? 0 : widget.originalCues.length - 1,
     );
     final restoreAlignment =
-        (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0);
+        (anchor?.itemLeadingEdge ?? _originalInitialAlignment).clamp(0.0, 1.0);
 
     // RS-11 / RS-24: capture the bottom's own position before Hide disposes
     // its list (independent of any video page on the original pane).
@@ -1941,9 +1960,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final anchor = _topVisible(_originalPositions);
     final maxIndex =
         widget.originalCues.isEmpty ? 0 : widget.originalCues.length - 1;
+    // D16 A: empty capture MUST NOT collapse to cue 0 over a mid session seed
+    // (sheet / keyboard restore path).
     return (
-      index: (anchor?.index ?? 0).clamp(0, maxIndex),
-      alignment: (anchor?.itemLeadingEdge ?? 0.0).clamp(0.0, 1.0),
+      index: (anchor?.index ?? _originalInitialScrollIndex).clamp(0, maxIndex),
+      alignment: (anchor?.itemLeadingEdge ?? _originalInitialAlignment)
+          .clamp(0.0, 1.0),
     );
   }
 
@@ -1972,22 +1994,33 @@ class _ReaderScreenState extends State<ReaderScreen> {
     ScrollNotification notification, {
     required bool fromOriginal,
   }) {
-    // D9 / RS-06: no cross-pane sync, ever. Arm only for same-pane persist
-    // on drag settle. Programmatic scrollTo/jumpTo omit dragDetails — ignore
-    // those. Wheel/trackpad: no dragDetails → no settle persist; dispose /
-    // Hide still save (RS-24).
-    if (notification is ScrollUpdateNotification &&
-        notification.dragDetails != null) {
-      _userInitiatedScroll = true;
+    // D9 / RS-06: no cross-pane sync, ever. Arm settle-persist for
+    // user-driven scrolls only (drag, wheel, trackpad via
+    // [UserScrollNotification]). Programmatic jumpTo/scrollTo do not emit
+    // UserScrollNotification — ignored (D16 C / RS-12).
+    if (notification is UserScrollNotification &&
+        notification.direction != ScrollDirection.idle) {
+      if (fromOriginal) {
+        _originalUserInitiatedScroll = true;
+      } else {
+        _translationUserInitiatedScroll = true;
+      }
     }
     if (notification is! ScrollEndNotification) return false;
-    if (!_userInitiatedScroll) return false;
+    final armed = fromOriginal
+        ? _originalUserInitiatedScroll
+        : _translationUserInitiatedScroll;
+    if (!armed) return false;
 
-    final userScroll = _userInitiatedScroll;
-    _userInitiatedScroll = false;
-    if (!userScroll) return false;
+    if (fromOriginal) {
+      _originalUserInitiatedScroll = false;
+    } else {
+      _translationUserInitiatedScroll = false;
+    }
 
-    // RS-12 / RS-24: each pane persists only its own anchor on settle.
+    // RS-12 / RS-24 / D16 C: refresh session seed immediately when capture is
+    // available, then persist after layout settles (wheel/trackpad included).
+    _refreshSessionSeedFromCapture(fromOriginal: fromOriginal);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (fromOriginal) {
@@ -1997,6 +2030,39 @@ class _ReaderScreenState extends State<ReaderScreen> {
       }
     });
     return false;
+  }
+
+  /// Best-effort sync of in-memory session seeds from the live list (D16 C).
+  /// Does not write Drift — that stays in [_persistReadingAnchor] /
+  /// [_persistTranslationReadingAnchor].
+  void _refreshSessionSeedFromCapture({required bool fromOriginal}) {
+    if (_isBookMode) {
+      if (fromOriginal) {
+        final captured = _captureBookOriginalAnchor();
+        if (captured == null) return;
+        _bookOriginalInitialScrollIndex = captured.index;
+        _bookOriginalInitialAlignment = captured.alignment;
+      } else {
+        final captured = _captureBookTranslationAnchor();
+        if (captured == null) return;
+        _bookTranslationInitialScrollIndex = captured.index;
+        _bookTranslationInitialAlignment = captured.alignment;
+      }
+      return;
+    }
+    if (fromOriginal) {
+      if (_hasVideo) return;
+      final top = _topVisible(_originalPositions);
+      if (top == null || widget.originalCues.isEmpty) return;
+      _originalInitialScrollIndex =
+          top.index.clamp(0, widget.originalCues.length - 1);
+      _originalInitialAlignment = top.itemLeadingEdge.clamp(0.0, 1.0);
+    } else {
+      final captured = _captureTranslationCueAnchor();
+      if (captured == null) return;
+      _translationInitialScrollIndex = captured.index;
+      _translationInitialAlignment = captured.alignment;
+    }
   }
 
   @override
@@ -2066,9 +2132,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// EPUB book pane: paragraph list + bottom chapter pager (RC-01…RC-04).
   ///
-  /// [split] uses distinct list Keys (like subtitle `readerCueList` vs
-  /// `readerOriginalCueList`) so PageStorage from single-pane does not override
-  /// Show/Hide `initialScrollIndex` (RS-10 / RS-11).
+  /// [split] uses distinct list Keys / prefixes (like subtitle `readerCueList`
+  /// vs `readerOriginalCueList`). Book lists themselves use ValueKey +
+  /// [_bookParagraphListGeneration] (not PageStorageKey) so Show/Hide seed and
+  /// pager rewind stay authoritative (RS-10/11, D16 B / RC-14).
   Widget _buildBookPane({bool split = false}) {
     final listKey = split
         ? const Key('readerOriginalBookParagraphList')
@@ -2136,8 +2203,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
           // Finder / RC-02 remount identity (ValueKey).
           key: Key('${listKeyPrefix}_$index'),
           child: ScrollablePositionedList.builder(
-            // PageStorageKey isolates single↔split slots (RS-11).
-            key: PageStorageKey<String>('${listKeyPrefix}_$index'),
+            // D16 B / RC-14: ValueKey + generation (not PageStorageKey) so
+            // revisiting a chapter cannot restore a prior mid-chapter offset.
+            // Single↔split still use distinct [listKeyPrefix] (RS-10/11).
+            key: ValueKey<String>(
+              '${listKeyPrefix}_${index}_$_bookParagraphListGeneration',
+            ),
             itemScrollController: fromOriginal
                 ? _bookOriginalScrollController
                 : _bookTranslationScrollController,

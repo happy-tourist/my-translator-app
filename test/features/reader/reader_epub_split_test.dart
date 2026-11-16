@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:my_translator_app/app/theme.dart';
@@ -516,6 +517,166 @@ void main() {
     // while still requiring mid-chapter (not para 0).
     expect((afterIndex - anchorIndex).abs(), lessThanOrEqualTo(15));
   });
+
+  testWidgets(
+    'RS-25: EPUB Show remount keeps mid-chapter (Hide→Show, not chapter start)',
+    (tester) async {
+      // D16 A / RS-25: mid → Hide → Show must not rewind to paragraph 0.
+      // Prefer drag (not tall initialScrollIndex seed) to avoid SPL jump hangs.
+      const paraCount = 40;
+      pumpOriginalChapters = _multiParaChapters(
+        chapterCount: 1,
+        paragraphCount: paraCount,
+        paraPrefix: 'Orig',
+      );
+      pumpTokenize = _emptyTokenize;
+
+      await pumpBookReader(tester);
+      const singleList = Key('readerBookParagraphList');
+      const splitList = Key('readerOriginalBookParagraphList');
+
+      await tester.drag(find.byKey(singleList), const Offset(0, -2500));
+      await _pumpFrames(tester);
+      final mid = _topParaIndex(
+        tester,
+        listKey: singleList,
+        keyPrefix: 'readerCue',
+        paragraphCount: paraCount,
+      );
+      expect(mid, greaterThan(0));
+
+      // Show → Hide → Show remounts single↔split keys twice (D16 A).
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester);
+
+      expect(find.byKey(splitList), findsOneWidget);
+      final after = _topParaIndex(
+        tester,
+        listKey: splitList,
+        keyPrefix: 'readerCue',
+        paragraphCount: paraCount,
+      );
+      expect(after, greaterThan(0));
+      expect((after - mid).abs(), lessThanOrEqualTo(15));
+    },
+  );
+
+  testWidgets(
+    'RC-14: Revisit chapter still starts at paragraph 0 (not PageStorage mid)',
+    (tester) async {
+      // D16 B / RC-14: mid on chapter 0 → next → back → para 0 (generation
+      // key defeats PageStorage). Chapter 0 tall (scroll mid like RS-10);
+      // chapter 1 tiny — avoids the 2×N tall remount hang.
+      const paraCount = 40;
+      List<EpubChapterDto> tallThenTiny({required String paraPrefix}) => [
+            EpubChapterDto(
+              index: 0,
+              title: 'Chapter 1',
+              paragraphs: [
+                for (var p = 0; p < paraCount; p++) '$paraPrefix $p',
+              ],
+            ),
+            EpubChapterDto(
+              index: 1,
+              title: 'Chapter 2',
+              paragraphs: const ['Only one'],
+            ),
+          ];
+      pumpOriginalChapters = tallThenTiny(paraPrefix: 'Orig');
+      pumpTranslationChapters = tallThenTiny(paraPrefix: 'Tr');
+      pumpTranslationDocumentId = 99;
+      pumpTokenize = _emptyTokenize;
+
+      await pumpBookReader(tester);
+      await tester.tap(find.byKey(const Key('readerSplitToggle')));
+      await _pumpFrames(tester);
+
+      const origList = Key('readerOriginalBookParagraphList');
+      await tester.drag(find.byKey(origList), const Offset(0, -2500));
+      await _pumpFrames(tester);
+      final mid = _topParaIndex(
+        tester,
+        listKey: origList,
+        keyPrefix: 'readerCue',
+        paragraphCount: paraCount,
+      );
+      expect(mid, greaterThan(0));
+
+      await tester.tap(find.byKey(const Key('readerBookChapterNext')));
+      await _pumpFrames(tester);
+      expect(find.text('2 / 2'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('readerBookChapterPrev')));
+      await _pumpFrames(tester);
+      expect(find.text('1 / 2'), findsOneWidget);
+
+      final origAfter = _topParaIndex(
+        tester,
+        listKey: origList,
+        keyPrefix: 'readerCue',
+        paragraphCount: paraCount,
+      );
+      final trAfter = _topParaIndex(
+        tester,
+        listKey: const Key('readerTranslationBookParagraphList'),
+        keyPrefix: 'readerTranslationCue',
+        paragraphCount: paraCount,
+      );
+      expect(origAfter, 0);
+      expect(trAfter, 0);
+      expect(find.byKey(const Key('readerCue_0')), findsOneWidget);
+      expect(find.byKey(const Key('readerTranslationCue_0')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'D16 C / RS-12: Wheel scroll updates original seed for reopen',
+    (tester) async {
+      const paraCount = 40;
+      final doc = await seedEpubDoc();
+      pumpOriginalDocumentId = doc.id;
+      pumpOriginalChapters = _multiParaChapters(
+        chapterCount: 1,
+        paragraphCount: paraCount,
+        paraPrefix: 'Orig',
+      );
+      pumpTokenize = _emptyTokenize;
+
+      await pumpBookReader(tester);
+      const singleList = Key('readerBookParagraphList');
+
+      // Wheel/trackpad: PointerScrollEvent (no dragDetails) — D16 C must
+      // still update session seed + persist on scroll-end.
+      final center = tester.getCenter(find.byKey(singleList));
+      await tester.sendEventToBinding(
+        PointerScrollEvent(position: center, scrollDelta: const Offset(0, 2400)),
+      );
+      await tester.sendEventToBinding(
+        PointerScrollEvent(position: center, scrollDelta: const Offset(0, 2400)),
+      );
+      await _pumpFrames(tester, frames: 12);
+
+      final mid = _topParaIndex(
+        tester,
+        listKey: singleList,
+        keyPrefix: 'readerCue',
+        paragraphCount: paraCount,
+      );
+      expect(mid, greaterThan(0));
+
+      // Allow async saveReadingAnchor from scroll-end persist.
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final anchor = await documents.loadReadingAnchor(doc.id);
+      expect(anchor, isNotNull);
+      expect(anchor!.paragraphIndex, isNotNull);
+      expect(anchor.paragraphIndex!, greaterThan(0));
+    },
+  );
 
   testWidgets(
     'RS-19: Show split does not align EPUB paragraph to original anchor',
